@@ -1,7 +1,22 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const { extractGoogleFolderId, getRuntimeConfig } = require('../lib/config');
 const { runSync, sanitizeUrl, slugFromFilename, classifyDriveError, diagnose } = require('../lib/sync');
+const { parseServiceAccount, signJwt, getAccessToken, resetTokenCache } = require('../lib/google-auth');
+
+function makeServiceAccount() {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+  });
+  return {
+    client_email: 'sync@example.iam.gserviceaccount.com',
+    private_key: privateKey,
+    type: 'service_account'
+  };
+}
 
 test('extractGoogleFolderId supports folder links', () => {
   const id = extractGoogleFolderId('https://drive.google.com/drive/folders/ABC123_xyz?usp=sharing');
@@ -198,6 +213,116 @@ test('diagnose reports OK and never leaks the API key', async () => {
   assert.equal(report.list.htmlItems, 1);
   assert.equal(report.config.apiKeyPresent, true);
   assert.ok(!JSON.stringify(report).includes('super-secret-key'));
+});
+
+test('parseServiceAccount accepts raw and base64 JSON', () => {
+  const sa = makeServiceAccount();
+  const raw = JSON.stringify(sa);
+  assert.equal(parseServiceAccount(raw).clientEmail, sa.client_email);
+
+  const b64 = Buffer.from(raw, 'utf-8').toString('base64');
+  assert.equal(parseServiceAccount(b64).clientEmail, sa.client_email);
+
+  assert.equal(parseServiceAccount(''), null);
+  assert.throws(() => parseServiceAccount('not-json'), /not valid JSON/);
+});
+
+test('signJwt produces a verifiable RS256 assertion', () => {
+  const sa = makeServiceAccount();
+  const creds = parseServiceAccount(JSON.stringify(sa));
+  const jwt = signJwt(creds, 1000);
+  const [header, claim, signature] = jwt.split('.');
+
+  const publicKey = crypto.createPublicKey(creds.privateKey);
+  const valid = crypto
+    .createVerify('RSA-SHA256')
+    .update(`${header}.${claim}`)
+    .verify(publicKey, Buffer.from(signature.replace(/-/g, '+').replace(/_/g, '/'), 'base64'));
+  assert.equal(valid, true);
+
+  const payload = JSON.parse(Buffer.from(claim, 'base64').toString('utf-8'));
+  assert.equal(payload.iss, sa.client_email);
+  assert.equal(payload.exp, 1000 + 3600);
+});
+
+test('getAccessToken caches the token across calls', async () => {
+  resetTokenCache();
+  const creds = parseServiceAccount(JSON.stringify(makeServiceAccount()));
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    return { ok: true, status: 200, text: async () => JSON.stringify({ access_token: 'tok-123', expires_in: 3600 }) };
+  };
+
+  assert.equal(await getAccessToken(creds, { fetchImpl }), 'tok-123');
+  assert.equal(await getAccessToken(creds, { fetchImpl }), 'tok-123');
+  assert.equal(calls, 1);
+  resetTokenCache();
+});
+
+test('runSync uses a service account bearer token, not an API key', async () => {
+  resetTokenCache();
+  const sa = makeServiceAccount();
+  const requests = [];
+  const saved = [];
+
+  const fetchImpl = async (url, init) => {
+    requests.push({ url, init });
+
+    if (url.includes('oauth2.googleapis.com/token')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ access_token: 'sa-token', expires_in: 3600 }) };
+    }
+    if (url.includes('/drive/v3/files?q=')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({ files: [{ id: 'f1', name: 'Deal.html', mimeType: 'text/html' }] })
+      };
+    }
+    return { ok: true, status: 200, statusText: 'OK', text: async () => '<h1>Deal</h1>' };
+  };
+
+  const result = await runSync({
+    config: { folderId: 'folder-1', serviceAccountJson: JSON.stringify(sa), storagePrefix: 'html' },
+    fetchImpl,
+    saveHtmlImpl: async (prefix, slug, html) => saved.push({ prefix, slug, html }),
+    logger: { log() {}, error() {} }
+  });
+
+  assert.deepEqual(result.uploaded, ['deal']);
+  assert.deepEqual(saved, [{ prefix: 'html', slug: 'deal', html: '<h1>Deal</h1>' }]);
+
+  const driveCalls = requests.filter((r) => r.url.includes('/drive/v3/files'));
+  assert.ok(driveCalls.length >= 2);
+  for (const call of driveCalls) {
+    assert.ok(!/[?&]key=/.test(call.url), 'service account requests must not append an API key');
+    assert.equal(call.init.headers.Authorization, 'Bearer sa-token');
+  }
+  resetTokenCache();
+});
+
+test('diagnose reports service-account mode and a share-with-email hint when empty', async () => {
+  resetTokenCache();
+  const sa = makeServiceAccount();
+  const fetchImpl = async (url) => {
+    if (url.includes('oauth2.googleapis.com/token')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ access_token: 'sa-token', expires_in: 3600 }) };
+    }
+    return { ok: true, status: 200, statusText: 'OK', text: async () => JSON.stringify({ files: [] }) };
+  };
+
+  const report = await diagnose({
+    config: { folderId: 'folder-1', serviceAccountJson: JSON.stringify(sa), storagePrefix: 'html' },
+    fetchImpl,
+    logger: { log() {}, error() {} }
+  });
+
+  assert.equal(report.config.authMode, 'serviceAccount');
+  assert.equal(report.config.serviceAccountEmail, sa.client_email);
+  assert.match(report.hint, /Share the Drive folder with the service account email/);
+  assert.match(report.hint, new RegExp(sa.client_email));
+  resetTokenCache();
 });
 
 test('runSync lists all Drive files but syncs only HTML files', async () => {

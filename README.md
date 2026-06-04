@@ -11,13 +11,31 @@ Project configuration lives in `/tmp/workspace/lemzakov/Lemzakov-Data-Room/sync.
 
 Required environment variables:
 
-- `GOOGLE_API_KEY` - Google API key for Drive API access
 - `GOOGLE_DRIVE_FOLDER_ID` **or** `GOOGLE_DRIVE_FOLDER_LINK`
+- **One** Google credential:
+  - `GOOGLE_SERVICE_ACCOUNT_JSON` (**recommended**) - service account key, raw JSON or base64-encoded JSON, **or**
+  - `GOOGLE_API_KEY` - API key (only works for fully public folders; cannot reliably enumerate folder contents)
 - `REDIS_URL` (provided by the Vercel Redis integration, for example `redis://...` or `rediss://...`)
 
 Optional:
 
-- `SYNC_SECRET` - required token for `/api/sync` and `/secret-refresh?run=1`
+- `SYNC_SECRET` - required token for `/api/sync`, `/api/diagnose` and `/secret-refresh?run=1`
+
+### Recommended: service account (works with private folders)
+
+An API key can only read **publicly shared** content and often returns an empty
+list when enumerating a folder. A service account avoids both problems:
+
+1. In Google Cloud Console, create a **service account** and a **JSON key**.
+2. Enable the **Google Drive API** for that project.
+3. Open the JSON key and copy the `client_email` (looks like `name@project.iam.gserviceaccount.com`).
+4. In Google Drive, **share the folder** with that email as **Viewer** (for a Shared Drive, add it as a member).
+5. Set `GOOGLE_SERVICE_ACCOUNT_JSON` in Vercel. Because Vercel env vars mangle
+   multi-line PEM keys, base64-encode the file first:
+   `base64 -w0 service-account.json` (macOS: `base64 -i service-account.json`).
+
+The folder no longer needs to be public. `/api/diagnose` reports `authMode` and,
+in service-account mode, the `serviceAccountEmail` to share with.
 
 ## Routes
 
