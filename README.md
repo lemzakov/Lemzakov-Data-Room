@@ -14,6 +14,7 @@ Required environment variables:
 - `GOOGLE_API_KEY` - Google API key for Drive API access
 - `GOOGLE_DRIVE_FOLDER_ID` **or** `GOOGLE_DRIVE_FOLDER_LINK`
 - `KV_REST_API_URL` and `KV_REST_API_TOKEN` (provided by Vercel KV integration)
+- Do not use a `redis://...` TCP URL here; this app requires the HTTPS REST URL/token pair.
 
 Optional:
 
