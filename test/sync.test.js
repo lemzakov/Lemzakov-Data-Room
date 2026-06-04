@@ -12,6 +12,11 @@ test('extractGoogleFolderId returns raw id', () => {
   assert.equal(extractGoogleFolderId('ABC123_xyz'), 'ABC123_xyz');
 });
 
+test('extractGoogleFolderId supports open?id links', () => {
+  const id = extractGoogleFolderId('https://drive.google.com/open?id=ABC123_xyz&usp=drive_fs');
+  assert.equal(id, 'ABC123_xyz');
+});
+
 test('slugFromFilename normalizes html filename', () => {
   assert.equal(slugFromFilename('Quarterly-Report.HTML'), 'quarterly-report');
 });
@@ -78,7 +83,7 @@ test('runSync uploads HTML files and logs request flow', async () => {
         status: 200,
         statusText: 'OK',
         json: async () => ({
-          files: [{ id: 'file-1', name: 'Report.html' }]
+          files: [{ id: 'file-1', name: 'Report.html', mimeType: 'text/html' }]
         })
       };
     }
@@ -113,5 +118,59 @@ test('runSync uploads HTML files and logs request flow', async () => {
     prefix: 'html',
     slug: 'report',
     html: '<h1>Report</h1>'
+  }]);
+});
+
+test('runSync lists all Drive files but syncs only HTML files', async () => {
+  const fetchCalls = [];
+  const saved = [];
+
+  const fetchImpl = async (url) => {
+    fetchCalls.push(url);
+
+    if (url.includes('/drive/v3/files?q=')) {
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        json: async () => ({
+          files: [
+            { id: 'file-1', name: 'Notes.txt', mimeType: 'text/plain' },
+            { id: 'file-2', name: 'Offer.html', mimeType: 'application/octet-stream' }
+          ]
+        })
+      };
+    }
+
+    return {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      text: async () => '<h1>Offer</h1>'
+    };
+  };
+
+  const result = await runSync({
+    config: {
+      folderId: 'folder-1',
+      googleApiKey: 'secret',
+      storagePrefix: 'html'
+    },
+    fetchImpl,
+    saveHtmlImpl: async (prefix, slug, html) => {
+      saved.push({ prefix, slug, html });
+    }
+  });
+
+  assert.deepEqual(result, {
+    uploaded: ['offer'],
+    total: 1,
+    failures: []
+  });
+  assert.equal(fetchCalls.length, 2);
+  assert.deepEqual(saved, [{
+    prefix: 'html',
+    slug: 'offer',
+    html: '<h1>Offer</h1>'
   }]);
 });
