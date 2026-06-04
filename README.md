@@ -50,8 +50,9 @@ what's wrong:
 
 ## Deployment behavior
 
-- Vercel runs `npm run build` during deployment, which now performs a full Google Drive → Redis sync.
-- Deployments fail if no HTML files are synced or if any file download/upload step fails.
+- Vercel runs `npm run build` during deployment, which attempts a full Google Drive → Redis sync.
+- A failed sync **no longer blocks the deploy**: the build logs a full diagnosis and continues, so `/api/diagnose` and already-synced pages stay available. The every-30-min cron (`/api/sync`) retries automatically once Drive is fixed.
+- Only unexpected (non-Drive) errors fail the build.
 - Sync logs include sanitized Google Drive request/response details and per-file failure details.
 
 ## Logs
