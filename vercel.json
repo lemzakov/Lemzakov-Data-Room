@@ -1,9 +1,4 @@
 {
-  "functions": {
-    "api/**/*.js": {
-      "runtime": "nodejs@20.x"
-    }
-  },
   "crons": [
     {
       "path": "/api/sync",
