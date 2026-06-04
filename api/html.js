@@ -21,7 +21,10 @@ module.exports = async function handler(req, res) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(html);
   } catch (error) {
-    console.error('Failed to load HTML');
+    console.error('Failed to load HTML', {
+      slug,
+      message: error.message
+    });
     return res.status(500).send('Failed to load HTML');
   }
 };
