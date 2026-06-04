@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { extractGoogleFolderId, getRuntimeConfig } = require('../lib/config');
-const { runSync, sanitizeUrl, slugFromFilename } = require('../lib/sync');
+const { runSync, sanitizeUrl, slugFromFilename, classifyDriveError, diagnose } = require('../lib/sync');
 
 test('extractGoogleFolderId supports folder links', () => {
   const id = extractGoogleFolderId('https://drive.google.com/drive/folders/ABC123_xyz?usp=sharing');
@@ -119,6 +119,85 @@ test('runSync uploads HTML files and logs request flow', async () => {
     slug: 'report',
     html: '<h1>Report</h1>'
   }]);
+});
+
+test('classifyDriveError detects HTTP referrer restriction', () => {
+  const hint = classifyDriveError(403, 'Requests from referer <empty> are blocked.');
+  assert.match(hint, /HTTP referrer/);
+});
+
+test('classifyDriveError detects disabled Drive API', () => {
+  const hint = classifyDriveError(403, 'Google Drive API has not been used in project 123 before or it is disabled.');
+  assert.match(hint, /not enabled/);
+});
+
+test('fetchFolderFiles requests Shared Drive support and surfaces the error hint', async () => {
+  let requestedUrl = '';
+  const fetchImpl = async (url) => {
+    requestedUrl = url;
+    return {
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      text: async () => 'Requests from referer <empty> are blocked.'
+    };
+  };
+
+  await assert.rejects(
+    () =>
+      runSync({
+        config: { folderId: 'folder-1', googleApiKey: 'secret', storagePrefix: 'html' },
+        fetchImpl,
+        logger: { log() {}, error() {} }
+      }),
+    (error) => {
+      assert.match(error.message, /HTTP referrer/);
+      assert.equal(error.details.status, 403);
+      return true;
+    }
+  );
+
+  assert.match(requestedUrl, /supportsAllDrives=true/);
+  assert.match(requestedUrl, /includeItemsFromAllDrives=true/);
+});
+
+test('diagnose reports an actionable hint when the folder is empty', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: async () => JSON.stringify({ files: [] })
+  });
+
+  const report = await diagnose({
+    config: { folderId: 'folder-1', googleApiKey: 'secret', storagePrefix: 'html' },
+    fetchImpl,
+    logger: { log() {}, error() {} }
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.list.totalItems, 0);
+  assert.match(report.hint, /publicly shared/);
+});
+
+test('diagnose reports OK and never leaks the API key', async () => {
+  const fetchImpl = async () => ({
+    ok: true,
+    status: 200,
+    statusText: 'OK',
+    text: async () => JSON.stringify({ files: [{ id: 'f1', name: 'Deal.html', mimeType: 'text/html' }] })
+  });
+
+  const report = await diagnose({
+    config: { folderId: 'folder-1', googleApiKey: 'super-secret-key', storagePrefix: 'html' },
+    fetchImpl,
+    logger: { log() {}, error() {} }
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.list.htmlItems, 1);
+  assert.equal(report.config.apiKeyPresent, true);
+  assert.ok(!JSON.stringify(report).includes('super-secret-key'));
 });
 
 test('runSync lists all Drive files but syncs only HTML files', async () => {

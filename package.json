@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "build": "node ./scripts/verify-sync-on-build.js",
-    "test": "node --test",
+    "diagnose": "node ./scripts/diagnose-drive.js",
+    "test": "node --test test/*.test.js",
     "start": "vercel dev"
   },
   "repository": {
