@@ -1,0 +1,14 @@
+{
+  "googleDrive": {
+    "folderIdEnv": "GOOGLE_DRIVE_FOLDER_ID",
+    "folderLinkEnv": "GOOGLE_DRIVE_FOLDER_LINK",
+    "apiKeyEnv": "GOOGLE_API_KEY"
+  },
+  "sync": {
+    "secretEnv": "SYNC_SECRET",
+    "schedule": "*/30 * * * *"
+  },
+  "storage": {
+    "htmlPrefix": "html"
+  }
+}
