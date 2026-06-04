@@ -1,31 +1,36 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { resolveRedisConfig } = require('../lib/storage');
+const { resolveRedisUrl } = require('../lib/storage');
 
-test('resolveRedisConfig uses KV REST variables', () => {
-  const cfg = resolveRedisConfig({
-    KV_REST_API_URL: 'https://example.upstash.io',
-    KV_REST_API_TOKEN: 'token-1'
+test('resolveRedisUrl uses REDIS_URL', () => {
+  const url = resolveRedisUrl({
+    REDIS_URL: 'redis://example.redis.io:6379'
   });
 
-  assert.equal(cfg.url, 'https://example.upstash.io');
-  assert.equal(cfg.token, 'token-1');
+  assert.equal(url, 'redis://example.redis.io:6379');
 });
 
-test('resolveRedisConfig rejects non-https URL', () => {
+test('resolveRedisUrl accepts rediss URL', () => {
+  const url = resolveRedisUrl({
+    REDIS_URL: 'rediss://example.redis.io:6379'
+  });
+
+  assert.equal(url, 'rediss://example.redis.io:6379');
+});
+
+test('resolveRedisUrl rejects non-redis URL', () => {
   assert.throws(
     () =>
-      resolveRedisConfig({
-        lemzakov_REDIS_URL: 'redis://example.redis.io:6379',
-        lemzakov_REDIS_TOKEN: 'secret'
+      resolveRedisUrl({
+        REDIS_URL: 'https://example.upstash.io'
       }),
-    /expected an https URL/
+    /expected redis:\/\/ or rediss:\/\//
   );
 });
 
-test('resolveRedisConfig requires both URL and token', () => {
+test('resolveRedisUrl requires a URL', () => {
   assert.throws(
-    () => resolveRedisConfig({ KV_REST_API_URL: 'https://example.upstash.io' }),
-    /Missing Redis REST config/
+    () => resolveRedisUrl({}),
+    /Missing Redis config/
   );
 });

@@ -17,7 +17,14 @@ module.exports = async function handler(req, res) {
     const result = await runSync();
     return res.status(200).json({ ok: true, ...result });
   } catch (error) {
-    console.error('Sync failed');
-    return res.status(500).json({ ok: false, error: error.message });
+    console.error('Sync failed', {
+      message: error.message,
+      details: error.details || null
+    });
+    return res.status(500).json({
+      ok: false,
+      error: error.message,
+      details: error.details || null
+    });
   }
 };
