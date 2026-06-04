@@ -7,9 +7,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error('[deploy] Sync verification failed', {
-    message: error.message,
-    details: error.details || null
-  });
+  console.error('[deploy] Sync verification failed');
   process.exit(1);
 });

@@ -1,5 +1,5 @@
 const { getRuntimeConfig } = require('../lib/config');
-const { runSync } = require('../lib/sync');
+const { publicSyncDetails, runSync } = require('../lib/sync');
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'GET' && req.method !== 'POST') {
@@ -17,14 +17,12 @@ module.exports = async function handler(req, res) {
     const result = await runSync();
     return res.status(200).json({ ok: true, ...result });
   } catch (error) {
-    console.error('Sync failed', {
-      message: error.message,
-      details: error.details || null
-    });
+    const details = publicSyncDetails(error);
+    console.error('Sync failed');
     return res.status(500).json({
       ok: false,
       error: error.message,
-      details: error.details || null
+      details
     });
   }
 };
