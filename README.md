@@ -21,6 +21,12 @@ Optional:
 
 - `SYNC_SECRET` - required token for `/api/sync`, `/api/diagnose` and `/secret-refresh?run=1`
 
+Page protection & passkey auth (see "Protecting pages" below):
+
+- `ADMIN_TOKEN` - token for the publish/access API (`/api/admin/page`). Falls back to `SYNC_SECRET` if unset.
+- `RESEND_API_KEY` + `EMAIL_FROM` - send the one-time email codes via [Resend](https://resend.com). `EMAIL_FROM` must be a verified sender, e.g. `Data Room <auth@yourdomain.com>`. If unset, codes are logged instead of emailed (dev only).
+- `WEBAUTHN_RP_ID` / `WEBAUTHN_ORIGIN` / `WEBAUTHN_RP_NAME` - optional overrides. By default the Relying Party ID and origin are derived from the request host, which is correct for a single custom domain. Set these explicitly if serving passkeys across a fixed custom domain different from the deployment host.
+
 ### Recommended: service account (works with private folders)
 
 An API key can only read **publicly shared** content and often returns an empty
@@ -42,7 +48,41 @@ in service-account mode, the `serviceAccountEmail` to share with.
 - `GET /api/sync` or `POST /api/sync` - sync HTML files from Drive to Redis
 - `GET /api/diagnose` - read-only health check of the Drive integration (never returns the API key)
 - `GET /secret-refresh` - web form for manual sync trigger
-- `GET /<slug>` - render stored HTML from KV
+- `GET /<slug>` - render stored HTML from KV (redirects to `/login` if the page is protected and the visitor is not signed in)
+- `GET /login` - sign-in / passkey-registration page for protected pages
+- `GET|POST /api/admin/page` - read or set a page's access (admin token required)
+- `POST /api/auth/*` - email-code + passkey registration/login endpoints (used by `/login`)
+
+## Protecting pages
+
+By default every synced page is **public**. Protection is opt-in and per page.
+
+**Set access** with the bundled Claude skill (`/publish-page`) or directly:
+
+```bash
+# protect a page for specific people
+curl -X POST https://your-domain/api/admin/page \
+  -H 'Content-Type: application/json' \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -d '{"slug":"investor-deck","allow":["alice@x.com","bob@y.com"]}'
+
+# make it public again
+curl -X POST https://your-domain/api/admin/page \
+  -H "X-Admin-Token: $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"slug":"investor-deck","protected":false}'
+```
+
+**How a visitor gets in** (all server-verified):
+
+1. They open a protected page and are redirected to `/login?next=/<slug>`.
+2. They enter their email and receive a **6-digit one-time code** (proves email ownership).
+3. After verifying, they create a **passkey** (Face ID / Touch ID / security key) bound to that email.
+4. A **~6-month session** cookie (`ldr_session`, httpOnly + Secure) is set; return visits use the passkey only.
+
+Access is enforced on every request: only emails on a page's allow list can view it, even with a valid passkey. Re-running the publish call with a new list revokes anyone removed. Access records live alongside the HTML in Redis, so re-syncing from Drive never resets them.
+
+The `/publish-page` skill (`.claude/skills/publish-page`) wraps all of this; it
+needs `LDR_BASE_URL` and `LDR_ADMIN_TOKEN` in the environment.
 
 ## Debugging the Google Drive integration
 
