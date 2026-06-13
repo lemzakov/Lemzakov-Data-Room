@@ -72,7 +72,7 @@ module.exports = async function handler(req, res) {
       protected: record.protected,
       allow: record.allow,
       note: record.protected
-        ? 'Allowed users verify their email (one-time code) on first visit, then register a passkey. Sessions last ~6 months.'
+        ? 'Restricted: visitors sign in with Google; approved emails get in, others can Request access (approved by you in Telegram). Sessions last ~6 months.'
         : 'Page is public.'
     });
   } catch (error) {

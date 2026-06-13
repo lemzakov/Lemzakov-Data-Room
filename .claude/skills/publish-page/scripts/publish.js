@@ -11,10 +11,12 @@
 //   LDR_ADMIN_TOKEN / --token   ADMIN_TOKEN (or SYNC_SECRET) set in Vercel
 //
 // Examples:
-//   node publish.js --slug investor-deck --allow a@x.com,b@y.com
-//   node publish.js --slug investor-deck --html-file ./deck.html --allow a@x.com
+//   node publish.js --slug investor-deck --restricted               # request-access only
+//   node publish.js --slug investor-deck --restricted --allow a@x.com  # + pre-approved
+//   node publish.js --slug investor-deck --allow a@x.com,b@y.com    # pre-approved (restricted)
+//   node publish.js --slug investor-deck --html-file ./deck.html --restricted
 //   node publish.js --slug public-memo --public
-//   node publish.js --slug investor-deck --show         # read current access
+//   node publish.js --slug investor-deck --show                     # read current access
 
 const fs = require('fs');
 
@@ -64,6 +66,12 @@ async function main() {
   if (args.public) {
     body.protected = false;
     body.allow = [];
+  } else if (args.restricted) {
+    // Restricted with no pre-approved emails: people use "Request access".
+    body.protected = true;
+    body.allow = args.allow
+      ? String(args.allow).split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
   } else if (args.allow) {
     body.allow = String(args.allow).split(',').map((s) => s.trim()).filter(Boolean);
     body.protected = true;

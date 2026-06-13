@@ -24,16 +24,16 @@ module.exports = async function handler(req, res) {
       const current = await getSessionFromRequest(req);
       const email = current && current.session && current.session.email;
       if (!isAllowed(email, acl)) {
-        // Unauthenticated -> bounce to login; authenticated but not on the list
-        // -> 403 (avoid a redirect loop).
-        if (!email) {
-          res.setHeader('Cache-Control', 'no-store');
-          res.statusCode = 302;
-          res.setHeader('Location', `/login?next=${encodeURIComponent('/' + slug)}`);
-          return res.end();
-        }
         res.setHeader('Cache-Control', 'no-store');
-        return res.status(403).send('You do not have access to this page.');
+        res.statusCode = 302;
+        if (!email) {
+          // Not signed in -> Google sign-in, returning here afterwards.
+          res.setHeader('Location', `/api/auth/google/start?next=${encodeURIComponent('/' + slug)}`);
+        } else {
+          // Signed in but not approved -> request-access page.
+          res.setHeader('Location', `/request-access?slug=${encodeURIComponent(slug)}`);
+        }
+        return res.end();
       }
     }
 
