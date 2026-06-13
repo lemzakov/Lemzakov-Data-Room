@@ -37,11 +37,15 @@ function renderPage(slug) {
     .who { font-size: .9rem; color: #374151; margin: 0 0 1rem; }
     .who b { color: #111827; }
     button { width: 100%; padding: .75rem; font-size: 1rem; font-weight: 600; color: #fff; background: #2563eb; border: 0; border-radius: .5rem; cursor: pointer; }
-    button:disabled { opacity: .6; cursor: progress; }
-    button.secondary { background: transparent; color: #2563eb; border: 1px solid #d1d5db; margin-top: .6rem; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    button.secondary { background: transparent; color: #2563eb; border: 1px solid #d1d5db; }
+    .actions { display: flex; gap: .6rem; }
+    .actions button { flex: 1; }
+    #switchBtn { margin-top: .6rem; }
     .msg { margin-top: 1rem; padding: .7rem .8rem; border-radius: .5rem; font-size: .9rem; }
     .msg.err { background: #fef2f2; color: #991b1b; }
     .msg.ok { background: #ecfdf5; color: #065f46; }
+    .hint { margin-top: .6rem; font-size: .8rem; color: #6b7280; }
     .hidden { display: none; }
     code { background: #f3f4f6; padding: .05rem .3rem; border-radius: .25rem; }
   </style>
@@ -52,16 +56,37 @@ function renderPage(slug) {
 
   <div class="card">
     <p class="who" id="who">Checking your sign-in…</p>
-    <button id="requestBtn" disabled>Request access</button>
+    <div class="actions">
+      <button id="requestBtn" disabled>Request access</button>
+      <button id="refreshBtn" class="secondary hidden">Refresh</button>
+    </div>
     <button id="switchBtn" class="secondary">Sign in with a different account</button>
     <div id="msg" class="msg hidden"></div>
+    <p id="hint" class="hint hidden">Checking automatically every minute…</p>
   </div>
 
   <script type="module">
     const slug = ${JSON.stringify(slug)};
     const $ = (id) => document.getElementById(id);
     const msg = $('msg');
+    // Per-page, per-tab flag so a sent request survives the bounce back here
+    // when "Refresh"/auto-refresh re-opens the still-restricted page.
+    const REQUESTED_KEY = 'access-requested:' + slug;
+    let autoTimer = null;
+
     function show(t, k) { msg.textContent = t; msg.className = 'msg ' + (k || ''); msg.classList.remove('hidden'); }
+    function openOriginal() { location.href = '/' + slug; }
+
+    // Lock the request button for this session and surface the Refresh control
+    // plus a once-a-minute auto-refresh that re-attempts the original page.
+    function enterRequestedState() {
+      const btn = $('requestBtn');
+      btn.disabled = true;
+      btn.textContent = 'Access requested';
+      $('refreshBtn').classList.remove('hidden');
+      $('hint').classList.remove('hidden');
+      if (!autoTimer) autoTimer = setInterval(openOriginal, 60000);
+    }
 
     async function init() {
       try {
@@ -72,7 +97,12 @@ function renderPage(slug) {
           return;
         }
         $('who').innerHTML = 'Signed in as <b>' + me.email + '</b>.';
-        $('requestBtn').disabled = false;
+        if (sessionStorage.getItem(REQUESTED_KEY)) {
+          show('Access requested. You will get in once the owner approves — use Refresh to check now, or wait for the automatic check.', 'ok');
+          enterRequestedState();
+        } else {
+          $('requestBtn').disabled = false;
+        }
       } catch {
         $('who').textContent = 'Could not check sign-in status.';
       }
@@ -88,10 +118,13 @@ function renderPage(slug) {
         });
         const data = await r.json().catch(() => ({}));
         if (r.ok && data.alreadyApproved) {
+          sessionStorage.removeItem(REQUESTED_KEY);
           show('You already have access. Redirecting…', 'ok');
-          setTimeout(() => location.href = '/' + slug, 700);
+          setTimeout(openOriginal, 700);
         } else if (r.ok && data.requested) {
-          show('Request sent. You will get access once the owner approves — just revisit the page.', 'ok');
+          sessionStorage.setItem(REQUESTED_KEY, '1');
+          show('Access requested at this time. You will get in once the owner approves — use Refresh to check now, or wait for the automatic check.', 'ok');
+          enterRequestedState();
         } else {
           show(data.error || 'Could not send request.', 'err');
           $('requestBtn').disabled = false;
@@ -101,6 +134,10 @@ function renderPage(slug) {
         $('requestBtn').disabled = false;
       }
     });
+
+    // Re-attempt the original page. If access was granted it loads; otherwise
+    // the server bounces back here and the requested state is restored.
+    $('refreshBtn').addEventListener('click', openOriginal);
 
     $('switchBtn').addEventListener('click', () => {
       location.href = '/api/auth/google/start?next=' + encodeURIComponent('/request-access?slug=' + slug);
