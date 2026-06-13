@@ -51,6 +51,8 @@ in service-account mode, the `serviceAccountEmail` to share with.
 - `GET /api/sync` or `POST /api/sync` - sync HTML files from Drive to Redis
 - `GET /api/diagnose` - read-only health check of the Drive integration (never returns the API key)
 - `GET /secret-refresh` - web form for manual sync trigger
+- `GET /admin` - admin dashboard: sign in with username `admin` + `ADMIN_TOKEN`, see every page, and flip any page between public and restricted
+- `GET /api/admin/pages` - list every stored page with its access state (admin token required)
 - `GET /<slug>` - render stored HTML from KV. If the page is restricted: redirects to Google sign-in when not signed in, or to `/request-access` when signed in but not approved.
 - `GET /login` - convenience redirect into Google sign-in
 - `GET /request-access` - page with the "Request access" button for restricted pages
@@ -66,7 +68,14 @@ By default every synced page is **public**. Protection is opt-in and per page.
 A **restricted** page requires Google sign-in, and only approved emails can view
 it; others can request access, which you approve from Telegram.
 
-**Set access** with the bundled Claude skill (`/publish-page`) or directly:
+**The easiest way** is the admin dashboard at **`/admin`**: sign in with the
+username `admin` and your `ADMIN_TOKEN` as the password. You'll see every synced
+page and can flip each between public and restricted (with an optional list of
+pre-approved emails) in one click. The token never leaves the browser's
+`sessionStorage`; every action is re-authorized server-side.
+
+You can also **set access** with the bundled Claude skill (`/publish-page`) or
+directly via the API:
 
 ```bash
 # make a page restricted (no one pre-approved; visitors use "Request access")
