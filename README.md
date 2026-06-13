@@ -21,6 +21,15 @@ Optional:
 
 - `SYNC_SECRET` - required token for `/api/sync`, `/api/diagnose` and `/secret-refresh?run=1`
 
+Page protection (public/restricted), Google sign-in & Telegram approvals (see "Protecting pages" below):
+
+- `ADMIN_TOKEN` - token for the publish/access API (`/api/admin/page`). Falls back to `SYNC_SECRET` if unset.
+- `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` - OAuth 2.0 Web client credentials used to sign visitors in. Add `https://<your-domain>/api/auth/google/callback` as an Authorized redirect URI in Google Cloud Console.
+- `GOOGLE_OAUTH_REDIRECT_URI` - optional override if the callback URL differs from `<request-origin>/api/auth/google/callback`.
+- `TELEGRAM_BOT_TOKEN` - bot token from [@BotFather](https://t.me/BotFather).
+- `TELEGRAM_ADMIN_CHAT_ID` - the chat id that should receive access requests (your own chat with the bot). Get it from `https://api.telegram.org/bot<TOKEN>/getUpdates` after messaging the bot.
+- `TELEGRAM_WEBHOOK_SECRET` - shared secret validating incoming webhook calls (set the same value when registering the webhook).
+
 ### Recommended: service account (works with private folders)
 
 An API key can only read **publicly shared** content and often returns an empty
@@ -42,7 +51,71 @@ in service-account mode, the `serviceAccountEmail` to share with.
 - `GET /api/sync` or `POST /api/sync` - sync HTML files from Drive to Redis
 - `GET /api/diagnose` - read-only health check of the Drive integration (never returns the API key)
 - `GET /secret-refresh` - web form for manual sync trigger
-- `GET /<slug>` - render stored HTML from KV
+- `GET /<slug>` - render stored HTML from KV. If the page is restricted: redirects to Google sign-in when not signed in, or to `/request-access` when signed in but not approved.
+- `GET /login` - convenience redirect into Google sign-in
+- `GET /request-access` - page with the "Request access" button for restricted pages
+- `GET|POST /api/admin/page` - read or set a page's access (admin token required)
+- `GET /api/auth/google/start` · `GET /api/auth/google/callback` - Google OAuth sign-in
+- `GET /api/auth/me` · `POST /api/auth/logout` - session helpers
+- `POST /api/access/request` - submit an access request (sends it to Telegram)
+- `POST /api/telegram/webhook` - receives Approve/Deny taps from the bot
+
+## Protecting pages
+
+By default every synced page is **public**. Protection is opt-in and per page.
+A **restricted** page requires Google sign-in, and only approved emails can view
+it; others can request access, which you approve from Telegram.
+
+**Set access** with the bundled Claude skill (`/publish-page`) or directly:
+
+```bash
+# make a page restricted (no one pre-approved; visitors use "Request access")
+curl -X POST https://your-domain/api/admin/page \
+  -H 'Content-Type: application/json' -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -d '{"slug":"investor-deck","protected":true,"allow":[]}'
+
+# restricted + pre-approve people
+curl -X POST https://your-domain/api/admin/page \
+  -H 'Content-Type: application/json' -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -d '{"slug":"investor-deck","allow":["alice@x.com","bob@y.com"]}'
+
+# make it public again
+curl -X POST https://your-domain/api/admin/page \
+  -H "X-Admin-Token: $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"slug":"investor-deck","protected":false}'
+```
+
+**How a visitor gets in** (identity is always Google-verified, server-side):
+
+1. They open a restricted page and are sent to **Google sign-in**.
+2. If their email is on the page's allow list → the page renders.
+3. If not → the **Request access** page; tapping the button sends their name +
+   email to your **Telegram** bot with Approve / Deny buttons.
+4. You tap **Approve** → the email is added to the page's allow list.
+5. They revisit and are let in. A **~6-month session** cookie (`ldr_session`,
+   httpOnly + Secure) keeps them signed in.
+
+Access is enforced on every request: only emails on a page's allow list can view
+it. Re-running publish with a new list revokes anyone removed. Access records
+live alongside the HTML in Redis, so re-syncing from Drive never resets them.
+
+The `/publish-page` skill (`.claude/skills/publish-page`) wraps the publish API;
+it needs `LDR_BASE_URL` and `LDR_ADMIN_TOKEN` in the environment.
+
+### One-time setup
+
+1. **Google OAuth**: create an OAuth 2.0 **Web application** client in Google
+   Cloud Console. Add `https://<your-domain>/api/auth/google/callback` as an
+   authorized redirect URI. Put the client id/secret in `GOOGLE_OAUTH_CLIENT_ID`
+   / `GOOGLE_OAUTH_CLIENT_SECRET`.
+2. **Telegram bot**: create a bot with @BotFather → `TELEGRAM_BOT_TOKEN`. Message
+   the bot, then read your chat id from
+   `https://api.telegram.org/bot<TOKEN>/getUpdates` → `TELEGRAM_ADMIN_CHAT_ID`.
+3. **Register the webhook** (once), using a secret you also store in
+   `TELEGRAM_WEBHOOK_SECRET`:
+   ```bash
+   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-domain>/api/telegram/webhook&secret_token=<SECRET>"
+   ```
 
 ## Debugging the Google Drive integration
 

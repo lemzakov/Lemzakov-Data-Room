@@ -13,6 +13,14 @@
       "dest": "/api/secret-refresh"
     },
     {
+      "src": "/login",
+      "dest": "/api/login"
+    },
+    {
+      "src": "/request-access",
+      "dest": "/api/request-access"
+    },
+    {
       "src": "/api/(.*)",
       "dest": "/api/$1"
     },
