@@ -11,5 +11,12 @@
   },
   "storage": {
     "htmlPrefix": "html"
+  },
+  "projects": {
+    "filePrefix": "projfile",
+    "configPrefix": "project",
+    "indexKey": "projects:index",
+    "cronSchedule": "*/15 * * * *",
+    "cronSecretEnv": "CRON_SECRET"
   }
 }

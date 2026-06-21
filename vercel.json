@@ -5,6 +5,10 @@
     {
       "path": "/api/sync",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/projects-sync",
+      "schedule": "*/15 * * * *"
     }
   ],
   "routes": [
@@ -32,8 +36,12 @@
       "handle": "filesystem"
     },
     {
+      "src": "/([^/]+)/(.*)",
+      "dest": "/api/project?slug=$1&path=$2"
+    },
+    {
       "src": "/([^/]+)",
-      "dest": "/api/html?slug=$1"
+      "dest": "/api/serve?slug=$1"
     }
   ]
 }
