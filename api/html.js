@@ -2,6 +2,7 @@ const { getRuntimeConfig } = require('../lib/config');
 const { readHtml } = require('../lib/storage');
 const { getAcl, isAllowed } = require('../lib/access');
 const { getSessionFromRequest } = require('../lib/session');
+const { injectSavePdfButton } = require('../lib/save-pdf');
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -47,7 +48,7 @@ module.exports = async function handler(req, res) {
       // Never let a shared cache store a protected page.
       res.setHeader('Cache-Control', 'private, no-store');
     }
-    return res.status(200).send(html);
+    return res.status(200).send(injectSavePdfButton(html));
   } catch (error) {
     console.error('Failed to load HTML', {
       slug,
