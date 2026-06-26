@@ -83,6 +83,7 @@ const PAGE = `<!doctype html>
       </div>
       <button id="logoutBtn" class="ghost">Sign out</button>
     </div>
+    <h2 style="font-size:1.05rem;margin:1.25rem 0 .5rem;">Single-file pages</h2>
     <div class="card">
       <table>
         <thead>
@@ -91,6 +92,33 @@ const PAGE = `<!doctype html>
         <tbody id="rows"></tbody>
       </table>
       <div id="dashMsg" class="msg hidden"></div>
+    </div>
+
+    <h2 style="font-size:1.05rem;margin:1.75rem 0 .5rem;">Projects (synced Drive folders)</h2>
+    <div class="card" style="margin-bottom:1rem;">
+      <form id="createForm" class="row" style="align-items:flex-end;gap:.6rem;">
+        <label style="margin:0;flex:1 1 9rem;"><span>Slug</span>
+          <input type="text" id="cSlug" placeholder="strategy" pattern="[a-z0-9-]+" required />
+        </label>
+        <label style="margin:0;flex:2 1 14rem;"><span>Drive folder ID or link</span>
+          <input type="text" id="cFolder" placeholder="1AbC... or https://drive.google.com/drive/folders/..." required />
+        </label>
+        <label style="margin:0;flex:1 1 9rem;"><span>Entry file (optional)</span>
+          <input type="text" id="cEntry" placeholder="index.html" />
+        </label>
+        <button type="submit" id="createBtn">Create</button>
+      </form>
+      <p class="allow" style="margin-top:.5rem;">Share the private Drive folder with the service account email first (see README). Slug must be unique and not collide with an existing page.</p>
+      <div id="createMsg" class="msg hidden"></div>
+    </div>
+    <div class="card">
+      <table>
+        <thead>
+          <tr><th>Project</th><th>Drive / files</th><th>Last sync</th><th>Access</th><th></th></tr>
+        </thead>
+        <tbody id="projRows"></tbody>
+      </table>
+      <div id="projMsg" class="msg hidden"></div>
     </div>
   </section>
 
@@ -106,6 +134,38 @@ const PAGE = `<!doctype html>
       <div class="row" style="justify-content:flex-end;">
         <button type="button" class="ghost" id="rCancel">Cancel</button>
         <button type="button" id="rSave">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Project access dialog -->
+  <dialog id="accessDlg">
+    <form method="dialog">
+      <h3 style="margin:.1rem 0 1rem;">Access for <code id="aSlug"></code></h3>
+      <fieldset>
+        <label><span>Allowed emails (one per line)</span></label>
+        <textarea id="aEmails" rows="5" style="width:100%;padding:.6rem .7rem;border:1px solid #d1d5db;border-radius:.5rem;background:transparent;color:inherit;font-family:inherit;"></textarea>
+      </fieldset>
+      <fieldset>
+        <label><span>Allowed domain (optional, e.g. mycompany.com)</span>
+          <input type="text" id="aDomain" placeholder="mycompany.com" />
+        </label>
+        <p class="allow">Anyone signing in with a matching email or domain can view every page in this project.</p>
+      </fieldset>
+      <div class="row" style="justify-content:flex-end;">
+        <button type="button" class="ghost" id="aCancel">Cancel</button>
+        <button type="button" id="aSave">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Project logs dialog -->
+  <dialog id="logsDlg">
+    <form method="dialog">
+      <h3 style="margin:.1rem 0 1rem;">Sync log — <code id="lSlug"></code></h3>
+      <pre id="lBody" style="max-height:24rem;overflow:auto;background:#0b1020;color:#e5e7eb;padding:.8rem;border-radius:.5rem;font-size:.78rem;white-space:pre-wrap;"></pre>
+      <div class="row" style="justify-content:flex-end;">
+        <button type="button" class="ghost" id="lClose">Close</button>
       </div>
     </form>
   </dialog>
@@ -147,6 +207,7 @@ const PAGE = `<!doctype html>
       if (ok) {
         $('login').classList.add('hidden');
         $('dash').classList.remove('hidden');
+        loadProjects();
       } else {
         sessionStorage.removeItem(TOKEN_KEY);
         showMsg($('loginMsg'), 'Wrong password (ADMIN_TOKEN).', 'err');
@@ -160,7 +221,7 @@ const PAGE = `<!doctype html>
       $('password').value = '';
     });
 
-    $('refreshBtn').addEventListener('click', () => loadPages());
+    $('refreshBtn').addEventListener('click', () => { loadPages(); loadProjects(); });
 
     // ---- Data --------------------------------------------------------------
     // Returns false on auth failure so the login flow can react.
@@ -276,10 +337,167 @@ const PAGE = `<!doctype html>
       }
     });
 
+    // ---- Projects ----------------------------------------------------------
+    function fmtTime(iso) {
+      if (!iso) return 'never';
+      try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    }
+
+    async function loadProjects() {
+      try {
+        const r = await fetch('/api/admin/projects', { headers: authHeaders() });
+        if (r.status === 401) return;
+        const data = await r.json();
+        if (!r.ok || !data.ok) { showMsg($('projMsg'), data.error || 'Failed to load projects.', 'err'); return; }
+        renderProjects(data.projects || []);
+      } catch {
+        showMsg($('projMsg'), 'Network error loading projects.', 'err');
+      }
+    }
+
+    function statusPill(status) {
+      const cls = status === 'ok' ? 'public' : (status === 'error' ? 'restricted' : '');
+      return '<span class="pill ' + cls + '">' + escapeHtml(status || 'created') + '</span>';
+    }
+
+    function renderProjects(projects) {
+      hide($('projMsg'));
+      const rows = $('projRows');
+      if (!projects.length) {
+        rows.innerHTML = '<tr><td colspan="5" class="muted">No projects yet. Create one above.</td></tr>';
+        return;
+      }
+      rows.innerHTML = projects.map((p) => {
+        const slug = escapeHtml(p.slug);
+        const access = (p.allowedEmails && p.allowedEmails.length ? p.allowedEmails.length + ' email(s)' : 'no emails')
+          + (p.allowedDomain ? ' · @' + escapeHtml(p.allowedDomain) : '');
+        const err = p.lastError ? '<div class="allow muted">' + escapeHtml(p.lastError) + '</div>' : '';
+        return '<tr>' +
+          '<td><a class="slug" href="/' + slug + '/" target="_blank" rel="noopener">' + slug + '</a>' + statusPill(p.status) + err + '</td>' +
+          '<td><div class="allow">' + escapeHtml(p.driveFolderId) + '</div><div class="allow muted">' + (p.fileCount || 0) + ' files</div></td>' +
+          '<td class="allow">' + escapeHtml(fmtTime(p.lastSyncedAt)) + '</td>' +
+          '<td class="allow">' + escapeHtml(access) + '</td>' +
+          '<td><div class="row">' +
+            '<button class="ghost" data-pact="sync" data-slug="' + slug + '">Sync</button>' +
+            '<button class="ghost" data-pact="force" data-slug="' + slug + '">Full resync</button>' +
+            '<button class="ghost" data-pact="access" data-slug="' + slug + '">Access</button>' +
+            '<button class="ghost" data-pact="logs" data-slug="' + slug + '">Logs</button>' +
+            '<button class="danger" data-pact="delete" data-slug="' + slug + '">Delete</button>' +
+          '</div></td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    async function projectAction(payload) {
+      const r = await fetch('/api/admin/projects', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify(payload)
+      });
+      const data = await r.json().catch(() => ({}));
+      return { r, data };
+    }
+
+    $('createForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      hide($('createMsg'));
+      $('createBtn').disabled = true;
+      const { r, data } = await projectAction({
+        action: 'create',
+        slug: $('cSlug').value.trim().toLowerCase(),
+        driveFolderId: $('cFolder').value.trim(),
+        entryFile: $('cEntry').value.trim()
+      });
+      $('createBtn').disabled = false;
+      if (r.ok && data.ok) {
+        $('cSlug').value = ''; $('cFolder').value = ''; $('cEntry').value = '';
+        showMsg($('createMsg'), 'Project created. Click "Sync" to pull files from Drive.', 'ok');
+        loadProjects();
+      } else {
+        showMsg($('createMsg'), data.error || 'Could not create project.', 'err');
+      }
+    });
+
+    $('projRows').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-pact]');
+      if (!btn) return;
+      const slug = btn.dataset.slug;
+      const act = btn.dataset.pact;
+
+      if (act === 'sync' || act === 'force') {
+        const force = act === 'force';
+        if (force && !confirm('Full resync re-downloads every file in "' + slug + '". Continue?')) return;
+        btn.disabled = true;
+        showMsg($('projMsg'), 'Syncing "' + slug + '"…', '');
+        const { r, data } = await projectAction({ action: 'sync', slug, force });
+        if (r.ok && data.ok) {
+          const res = data.result || {};
+          showMsg($('projMsg'), 'Synced "' + slug + '": ' + (res.downloaded || 0) + ' downloaded, ' + (res.unchanged || 0) + ' unchanged, ' + (res.removed || 0) + ' removed.', 'ok');
+        } else {
+          showMsg($('projMsg'), 'Sync failed for "' + slug + '": ' + (data.error || 'unknown error') + ' (see Logs).', 'err');
+        }
+        loadProjects();
+        return;
+      }
+
+      if (act === 'delete') {
+        if (!confirm('Delete project "' + slug + '" and all its synced files? This cannot be undone.')) return;
+        const { r, data } = await projectAction({ action: 'delete', slug });
+        if (r.ok && data.ok) showMsg($('projMsg'), 'Deleted "' + slug + '".', 'ok');
+        else showMsg($('projMsg'), data.error || 'Delete failed.', 'err');
+        loadProjects();
+        return;
+      }
+
+      if (act === 'access') { openAccess(slug); return; }
+      if (act === 'logs') { openLogs(slug); return; }
+    });
+
+    // ---- Project access dialog ---------------------------------------------
+    const accessDlg = $('accessDlg');
+    let accessSlug = '';
+    async function openAccess(slug) {
+      accessSlug = slug;
+      $('aSlug').textContent = slug;
+      $('aEmails').value = ''; $('aDomain').value = '';
+      try {
+        const r = await fetch('/api/admin/projects', { headers: authHeaders() });
+        const data = await r.json();
+        const p = (data.projects || []).find((x) => x.slug === slug);
+        if (p) { $('aEmails').value = (p.allowedEmails || []).join('\\n'); $('aDomain').value = p.allowedDomain || ''; }
+      } catch {}
+      accessDlg.showModal();
+    }
+    $('aCancel').addEventListener('click', () => accessDlg.close());
+    $('aSave').addEventListener('click', async () => {
+      const allowedEmails = $('aEmails').value.split(/[\\n,;]+/).map((s) => s.trim()).filter(Boolean);
+      const allowedDomain = $('aDomain').value.trim();
+      $('aSave').disabled = true;
+      const { r, data } = await projectAction({ action: 'update', slug: accessSlug, allowedEmails, allowedDomain });
+      $('aSave').disabled = false;
+      if (r.ok && data.ok) { accessDlg.close(); showMsg($('projMsg'), 'Updated access for "' + accessSlug + '".', 'ok'); loadProjects(); }
+      else showMsg($('projMsg'), data.error || 'Could not save access.', 'err');
+    });
+
+    // ---- Project logs dialog -----------------------------------------------
+    const logsDlg = $('logsDlg');
+    async function openLogs(slug) {
+      $('lSlug').textContent = slug;
+      $('lBody').textContent = 'Loading…';
+      logsDlg.showModal();
+      try {
+        const r = await fetch('/api/admin/projects?slug=' + encodeURIComponent(slug) + '&logs=1', { headers: authHeaders() });
+        const data = await r.json();
+        const lines = (data.logs || []).map((l) => '[' + l.at + '] ' + l.level.toUpperCase() + ': ' + l.message + (l.extra ? ' ' + JSON.stringify(l.extra) : ''));
+        $('lBody').textContent = lines.length ? lines.join('\\n') : 'No logs yet.';
+      } catch { $('lBody').textContent = 'Failed to load logs.'; }
+    }
+    $('lClose').addEventListener('click', () => logsDlg.close());
+
     // Resume an existing session if the token is still in sessionStorage.
     if (token()) {
       loadPages(true).then((ok) => {
-        if (ok) { $('login').classList.add('hidden'); $('dash').classList.remove('hidden'); }
+        if (ok) { $('login').classList.add('hidden'); $('dash').classList.remove('hidden'); loadProjects(); }
         else sessionStorage.removeItem(TOKEN_KEY);
       });
     }

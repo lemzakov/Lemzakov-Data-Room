@@ -1,13 +1,18 @@
 # Lemzakov-Data-Room
 
-Simple Vercel app that syncs public HTML files from a Google Drive folder into Vercel Redis and serves them by slug:
+Vercel app that syncs HTML from Google Drive into Vercel Redis and serves it. Two flows share the same stack:
 
-- `https://your-domain/<html-file-name-without-.html>`
-- manual refresh page: `https://your-domain/secret-refresh`
+1. **Single-file pages** — each `.html` in one Drive folder is served by slug:
+   - `https://your-domain/<html-file-name-without-.html>`
+   - manual refresh page: `https://your-domain/secret-refresh`
+2. **Project portals** — each project maps ONE private Drive folder (recursively,
+   including subfolders + static assets) to `https://your-domain/<projectname>`,
+   gated behind Google sign-in and a per-project allow list. See
+   [Project portals](#project-portals-multi-page-synced-drive-folders) below.
 
 ## Configuration
 
-Project configuration lives in `/tmp/workspace/lemzakov/Lemzakov-Data-Room/sync.config.json`.
+Project configuration lives in `sync.config.json`. All required environment variables are documented in `.env.example`.
 
 Required environment variables:
 
@@ -61,6 +66,14 @@ in service-account mode, the `serviceAccountEmail` to share with.
 - `GET /api/auth/me` · `POST /api/auth/logout` - session helpers
 - `POST /api/access/request` - submit an access request (sends it to Telegram)
 - `POST /api/telegram/webhook` - receives Approve/Deny taps from the bot
+
+Project portal routes:
+
+- `GET /<projectname>/` and `GET /<projectname>/<path>` - serve a project's mirrored files (entry point at the root). Requires Google sign-in **and** membership in the project; unauthorized users get a clean "no access" page.
+- `GET /api/admin/projects` - list projects (admin token); `?slug=&logs=1` returns a project's sync logs
+- `POST /api/admin/projects` - project actions (`create`/`update`/`delete`/`sync`/`addEmail`/`removeEmail`/`setDomain`), admin token required
+- `GET|POST /api/projects-sync` - incremental sync of all projects (Vercel Cron target; `?force=1` for a full resync). Protected by `CRON_SECRET`/`SYNC_SECRET`.
+- `POST /api/projects-changes` - Drive `changes.watch` webhook **stub** (acknowledges only; cron does the syncing for now)
 
 ## Protecting pages
 
@@ -125,6 +138,88 @@ it needs `LDR_BASE_URL` and `LDR_ADMIN_TOKEN` in the environment.
    ```bash
    curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-domain>/api/telegram/webhook&secret_token=<SECRET>"
    ```
+
+## Project portals (multi-page synced Drive folders)
+
+A **project** maps ONE private Google Drive folder to a URL slug and serves the
+whole folder — recursively, including subfolders and static assets — at
+`https://your-domain/<projectname>`. Every page is gated behind Google sign-in
+plus a per-project allow list. This is separate from, and does not affect, the
+single-file flow above.
+
+**Persistence:** Redis (the project's existing durable store). Each project is
+stored at `project:<slug>`, indexed in the `projects:index` set, with files
+mirrored under `projfile:<slug>:<relPath>` and sync logs at `projectlog:<slug>`.
+
+### How a private Drive folder reaches the service account
+
+The folder is **never made public**. The service account reads it because you
+share it explicitly:
+
+1. Create a Google Cloud **service account** + **JSON key** and enable the
+   **Google Drive API** (same account used by the single-file flow — see
+   [Recommended: service account](#recommended-service-account-works-with-private-folders)).
+2. Copy the service account's `client_email`
+   (`name@project.iam.gserviceaccount.com`).
+3. In Google Drive, open the project's root folder → **Share** → add that email
+   as **Viewer**. Subfolders inherit access. (For a Shared Drive, add the
+   service account as a member of the drive.)
+4. Set `GOOGLE_SERVICE_ACCOUNT_JSON` in Vercel (base64-encoded is safest).
+
+If a sync returns 0 files, the folder almost certainly isn't shared with the
+service account — re-check step 3. The per-project **Logs** button in `/admin`
+shows exactly what was listed, downloaded, and skipped.
+
+### Creating and managing projects (`/admin`)
+
+Sign in to **`/admin`** (username `admin` + `ADMIN_TOKEN`). The **Projects**
+section lets you:
+
+- **Create** a project: pick a URL slug (lowercase, url-safe, must be unique and
+  not collide with `/admin`, the API, or an existing single-file page), paste the
+  Drive **folder ID or link**, and optionally set an **entry filename**.
+- **Sync now** (incremental) or **Full resync** (re-downloads everything).
+- **Access**: edit the allowed-emails list and/or an allowed **domain**
+  (e.g. `mycompany.com`).
+- **Logs**: view recent sync activity and errors.
+- **Delete**: removes the project config **and** all its mirrored files.
+
+### Incremental sync, cross-links, and entry point
+
+- **Incremental:** each file's Drive `modifiedTime` is stored in the project's
+  `fileManifest`; only changed/new files are re-downloaded, deleted files are
+  pruned. "Full resync" ignores the manifest.
+- **Asset-aware:** only real `.html` and static assets (images/CSS/JS/fonts/…)
+  are taken. Google-native Docs/Sheets/Slides are skipped and logged.
+- **Cross-links preserved:** the Drive folder structure is mirrored **exactly**,
+  so relative links (`./page2.html`, `../sub/index.html`) resolve unchanged.
+  `/<projectname>` redirects to `/<projectname>/` so relative links resolve
+  against the project prefix. Only **root-relative** links (`/style.css`) are
+  rewritten — to `/<projectname>/style.css`; absolute and relative links are left
+  untouched.
+- **Entry point order:** `index.html` at the root → the configured entry
+  filename (if present) → the first `.html` alphabetically.
+
+### Access control
+
+- **Admin** (`/admin` + `/api/admin/*`): guarded by `ADMIN_TOKEN`
+  (falls back to `SYNC_SECRET`).
+- **Viewers:** must sign in with **Google OAuth** (same OAuth app as the
+  single-file flow — see [One-time setup](#one-time-setup)). A signed-in user can
+  view a project only if their verified email is on the project's
+  `allowedEmails` list **or** matches its `allowedDomain`. Everyone else gets a
+  clean "no access" page. Enforcement happens on **every** `/<projectname>/*`
+  request (`api/project.js` → `lib/project-serve.js`), and project files are
+  served with `Cache-Control: private, no-store`.
+
+### Scheduled sync
+
+A Vercel Cron hits `/api/projects-sync` (default **every 15 minutes**,
+incremental, all projects). Change the interval by editing the `schedule` in
+`vercel.json`. Protect it with `CRON_SECRET` (Vercel Cron sends it as a Bearer
+token); it falls back to `SYNC_SECRET`. `POST /api/projects-changes` is a stub
+for Drive `changes.watch` push notifications (near-instant sync) — wired and
+acknowledging, but the cron does the actual syncing for now.
 
 ## Debugging the Google Drive integration
 
