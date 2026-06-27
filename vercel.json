@@ -13,6 +13,22 @@
   ],
   "routes": [
     {
+      "src": "/mcp",
+      "dest": "/api/mcp"
+    },
+    {
+      "src": "/.well-known/oauth-protected-resource(?:/.*)?",
+      "dest": "/api/well-known/oauth-protected-resource"
+    },
+    {
+      "src": "/.well-known/oauth-authorization-server(?:/.*)?",
+      "dest": "/api/well-known/oauth-authorization-server"
+    },
+    {
+      "src": "/.well-known/openid-configuration(?:/.*)?",
+      "dest": "/api/well-known/oauth-authorization-server"
+    },
+    {
       "src": "/secret-refresh",
       "dest": "/api/secret-refresh"
     },
