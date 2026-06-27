@@ -35,7 +35,32 @@ Server side also needs (see repo README): `GOOGLE_OAUTH_CLIENT_ID` /
 
 If `LDR_BASE_URL` or `LDR_ADMIN_TOKEN` is missing, ask the user. Never print the token.
 
-## Usage
+## Two ways to publish (pick one)
+
+This skill can publish HTML in two equivalent ways — **neither needs Google
+Drive**. Both push HTML straight into the site and set per-page access.
+
+1. **MCP server (recommended, no Drive):** the bundled `data-room` MCP server
+   (`mcp/data-room-mcp.js`, registered in `.mcp.json`) exposes tools you can
+   call directly:
+   - `publish_page` — publish/replace a page's HTML and set access in one call
+   - `set_page_access` — flip a page public/restricted and edit its allow list
+   - `get_page` — read a page's current access
+   - `list_pages` — list every stored page and its access state
+
+   It needs `LDR_BASE_URL` and `LDR_ADMIN_TOKEN` in its environment (the same
+   values the script uses). Prefer these tools when they're available — e.g.
+   call `publish_page` with `{ "slug": "investor-deck", "html": "<!doctype …>",
+   "access": "restricted", "allow": ["a@x.com"] }`.
+
+2. **CLI helper:** run `scripts/publish.js` with Node (below). Same admin API
+   under the hood; use this when the MCP server isn't wired up.
+
+> Pages can also originate from a synced Google Drive folder (see the repo
+> README). That flow is independent — both the MCP tools and the CLI write the
+> HTML directly, so you never need Drive to publish a single page.
+
+## Usage (CLI helper)
 
 Run the helper (`scripts/publish.js`) with Node:
 
