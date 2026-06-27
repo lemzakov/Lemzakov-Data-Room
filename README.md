@@ -67,6 +67,12 @@ in service-account mode, the `serviceAccountEmail` to share with.
 - `POST /api/access/request` - submit an access request (sends it to Telegram)
 - `POST /api/telegram/webhook` - receives Approve/Deny taps from the bot
 
+Remote MCP connector routes (OAuth-protected; see "Remote MCP connector" below):
+
+- `GET|POST /mcp` - the remote MCP endpoint (Bearer token required)
+- `GET /.well-known/oauth-protected-resource` · `GET /.well-known/oauth-authorization-server` - OAuth discovery metadata
+- `POST /api/mcp/register` - dynamic client registration; `GET|POST /api/mcp/authorize` - sign-in + auth code; `POST /api/mcp/token` - token exchange
+
 Project portal routes:
 
 - `GET /<projectname>/` and `GET /<projectname>/<path>` - serve a project's mirrored files (entry point at the root). Requires Google sign-in **and** membership in the project; unauthorized users get a clean "no access" page.
@@ -156,6 +162,48 @@ export LDR_ADMIN_TOKEN=...   # ADMIN_TOKEN / SYNC_SECRET
 
 This is the recommended path for publishing a **single** page; the Drive sync
 flow remains available and unchanged for folder-based content.
+
+### Remote MCP connector (OAuth) — publish from Claude mobile/desktop/web
+
+The stdio server above runs **locally** (Claude Code / Claude Desktop). To
+publish HTML straight from a **Claude.ai chat on your phone, desktop app, or the
+web** — e.g. "publish this as `/pitch`" right after Claude generates a page —
+the repo also ships a **remote, OAuth-protected MCP server** that you add as a
+[custom connector](https://support.anthropic.com/en/articles/11175166-about-custom-connectors).
+
+**Add the connector** (Claude → Settings → Connectors → *Add custom connector*):
+
+```
+https://<your-domain>/mcp
+```
+
+Claude discovers the OAuth endpoints automatically, opens a small sign-in page,
+and asks for your **admin token** (the same `ADMIN_TOKEN` / `SYNC_SECRET` that
+guards `/admin`). After you enter it once, Claude holds an access token and can
+call the publish tools (`publish_page`, `set_page_access`, `get_page`,
+`list_pages`) from any chat. No extra environment variables are required — it
+reuses `ADMIN_TOKEN`, `REDIS_URL`, and the existing page store.
+
+**How the OAuth works** (standard MCP authorization — Authorization Code + PKCE
++ Dynamic Client Registration, implemented with zero new dependencies):
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /mcp` · `POST /mcp` | The MCP endpoint. Requires a Bearer token; unauthenticated calls return `401` with a `WWW-Authenticate` challenge that starts the flow. |
+| `GET /.well-known/oauth-protected-resource` | RFC 9728 — points at the authorization server. |
+| `GET /.well-known/oauth-authorization-server` | RFC 8414 — advertises the endpoints below + PKCE (S256). |
+| `POST /api/mcp/register` | RFC 7591 — dynamic client registration (Claude self-registers). |
+| `GET\|POST /api/mcp/authorize` | Login page; you enter the admin token, it mints a one-time auth code. |
+| `POST /api/mcp/token` | Exchanges the code (verifying PKCE) for an access + refresh token. |
+
+Access tokens live in Redis (`mcp:token:*`) with a 30-day TTL and are refreshed
+automatically; revoke a connector by deleting its `mcp:token:*` / `mcp:refresh:*`
+keys (or rotating `ADMIN_TOKEN`). The login step authenticates **you** with the
+admin token; PKCE protects the code exchange, so only someone who knows the
+token can ever mint a token.
+
+> Unlike viewer sign-in, the connector does **not** require Google OAuth or any
+> Google Cloud changes — it gates on the admin token you already have.
 
 ### One-time setup
 
