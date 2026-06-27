@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "data-room": {
+      "command": "node",
+      "args": ["mcp/data-room-mcp.js"],
+      "env": {
+        "LDR_BASE_URL": "${LDR_BASE_URL}",
+        "LDR_ADMIN_TOKEN": "${LDR_ADMIN_TOKEN}"
+      }
+    }
+  }
+}

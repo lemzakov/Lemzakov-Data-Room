@@ -124,6 +124,39 @@ live alongside the HTML in Redis, so re-syncing from Drive never resets them.
 The `/publish-page` skill (`.claude/skills/publish-page`) wraps the publish API;
 it needs `LDR_BASE_URL` and `LDR_ADMIN_TOKEN` in the environment.
 
+### MCP server: upload HTML without Google Drive
+
+For MCP clients (Claude Code / Claude Desktop / the `/publish-page` skill) the
+repo ships a small **stdio MCP server** at `mcp/data-room-mcp.js`, registered in
+`.mcp.json` as the `data-room` server. It publishes HTML **directly** — no
+Google Drive folder, no sync — by calling the same admin API as above. It has
+**zero runtime dependencies** (Node built-ins only).
+
+It reads two env vars (the same ones the skill uses):
+
+- `LDR_BASE_URL` — the deployed site, e.g. `https://data-room.example.com`
+- `LDR_ADMIN_TOKEN` — the `ADMIN_TOKEN` (or `SYNC_SECRET`) set in Vercel
+
+Tools:
+
+| Tool | What it does |
+|---|---|
+| `publish_page` | Publish/replace a page's HTML (inline `html` or local `htmlFile`) and set access (`public`/`restricted` + `allow`) in one call |
+| `set_page_access` | Flip a page public/restricted and edit its allow list (no HTML change) |
+| `get_page` | Read a page's current access record |
+| `list_pages` | List every stored page and its access state |
+
+`.mcp.json` references the env vars by name, so export them (or put them in your
+MCP client config) before starting the client:
+
+```bash
+export LDR_BASE_URL=https://data-room.example.com
+export LDR_ADMIN_TOKEN=...   # ADMIN_TOKEN / SYNC_SECRET
+```
+
+This is the recommended path for publishing a **single** page; the Drive sync
+flow remains available and unchanged for folder-based content.
+
 ### One-time setup
 
 1. **Google OAuth**: create an OAuth 2.0 **Web application** client in Google
