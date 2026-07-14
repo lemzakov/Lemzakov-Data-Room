@@ -55,7 +55,9 @@ test('publish_page saves html and writes the ACL (restricted via allow)', async 
   const deps = {
     getRuntimeConfig: () => ({ storagePrefix: 'html' }),
     saveHtml: async (prefix, slug, html) => saved.push({ prefix, slug, html }),
-    setAcl: async (slug, opts) => { acls.push({ slug, ...opts }); return { protected: opts.protected, allow: opts.allow }; }
+    setAcl: async (slug, opts) => { acls.push({ slug, ...opts }); return { protected: opts.protected, allow: opts.allow }; },
+    getCategory: async () => '',
+    notifyPagePublished: async () => {}
   };
   const res = await core.callTool('publish_page', { slug: 'Deck', html: '<p>hi</p>', allow: ['a@x.com'] }, deps);
   assert.ok(!res.isError);
@@ -68,7 +70,9 @@ test('publish_page defaults to public when no access given', async () => {
   const deps = {
     getRuntimeConfig: () => ({ storagePrefix: 'html' }),
     saveHtml: async () => {},
-    setAcl: async (slug, opts) => ({ protected: opts.protected, allow: opts.allow })
+    setAcl: async (slug, opts) => ({ protected: opts.protected, allow: opts.allow }),
+    getCategory: async () => '',
+    notifyPagePublished: async () => {}
   };
   const res = await core.callTool('publish_page', { slug: 'memo', html: '<h1>x</h1>' }, deps);
   assert.match(res.content[0].text, /"protected": false/);
@@ -94,18 +98,41 @@ test('set_page_access rejects a bogus access value', async () => {
   assert.match(res.content[0].text, /public.*restricted/);
 });
 
-test('list_pages aggregates slugs with their ACL state', async () => {
+test('list_pages aggregates slugs with their ACL state and category', async () => {
   const deps = {
     getRuntimeConfig: () => ({ storagePrefix: 'html' }),
     listSlugs: async () => ['a', 'b'],
-    getAcl: async (slug) => (slug === 'a' ? { protected: true, allow: ['x@y.com'] } : null)
+    getAcl: async (slug) => (slug === 'a' ? { protected: true, allow: ['x@y.com'] } : null),
+    getCategory: async (slug) => (slug === 'a' ? 'Investors' : '')
   };
   const res = await core.callTool('list_pages', {}, deps);
   const parsed = JSON.parse(res.content[0].text);
   assert.deepEqual(parsed.pages, [
-    { slug: 'a', protected: true, allow: ['x@y.com'] },
-    { slug: 'b', protected: false, allow: [] }
+    { slug: 'a', protected: true, allow: ['x@y.com'], category: 'Investors' },
+    { slug: 'b', protected: false, allow: [], category: '' }
   ]);
+});
+
+test('publish_page stores a category and notifies with page addresses', async () => {
+  const saved = [];
+  const cats = [];
+  let notified = null;
+  const deps = {
+    getRuntimeConfig: () => ({ storagePrefix: 'html' }),
+    saveHtml: async () => { saved.push(true); },
+    setAcl: async (slug, opts) => ({ protected: opts.protected, allow: opts.allow }),
+    setPageCategory: async (slug, category) => { cats.push({ slug, category }); return { category }; },
+    getCategory: async () => '',
+    pageUrls: (slug) => [`https://data.lemzakov.com/${slug}`, `https://data.wize.ae/${slug}`],
+    notifyPagePublished: async (payload) => { notified = payload; }
+  };
+  const res = await core.callTool('publish_page', { slug: 'Deck', html: '<p>hi</p>', category: 'Investors' }, deps);
+  assert.ok(!res.isError);
+  assert.deepEqual(cats, [{ slug: 'deck', category: 'Investors' }]);
+  assert.equal(notified.slug, 'deck');
+  assert.equal(notified.category, 'Investors');
+  assert.deepEqual(notified.urls, ['https://data.lemzakov.com/deck', 'https://data.wize.ae/deck']);
+  assert.match(res.content[0].text, /"category": "Investors"/);
 });
 
 // ===========================================================================

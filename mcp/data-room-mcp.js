@@ -127,6 +127,10 @@ const TOOLS = [
           type: 'array',
           items: { type: 'string' },
           description: 'Emails pre-approved for a restricted page.'
+        },
+        category: {
+          type: 'string',
+          description: 'Optional category label used to organize pages in /admin and the Telegram bot.'
         }
       },
       required: ['slug']
@@ -174,6 +178,7 @@ const TOOL_IMPLS = {
       body.protected = isProtected;
       body.allow = allow;
     }
+    if (typeof args.category === 'string') body.category = args.category;
     return apiPost('/api/admin/page', body, deps);
   },
 

@@ -83,11 +83,19 @@ const PAGE = `<!doctype html>
       </div>
       <button id="logoutBtn" class="ghost">Sign out</button>
     </div>
-    <h2 style="font-size:1.05rem;margin:1.25rem 0 .5rem;">Single-file pages</h2>
+    <div class="topbar" style="margin:1.25rem 0 .5rem;">
+      <h2 style="font-size:1.05rem;margin:0;">Single-file pages</h2>
+      <div class="row">
+        <label style="margin:0;font-size:.8rem;color:#6b7280;font-weight:600;" for="catFilter">Category</label>
+        <select id="catFilter" style="padding:.35rem .5rem;border:1px solid #d1d5db;border-radius:.4rem;background:transparent;color:inherit;font-size:.85rem;">
+          <option value="">All categories</option>
+        </select>
+      </div>
+    </div>
     <div class="card">
       <table>
         <thead>
-          <tr><th>Page</th><th>Access</th><th></th></tr>
+          <tr><th>Page</th><th>Category</th><th>Access</th><th></th></tr>
         </thead>
         <tbody id="rows"></tbody>
       </table>
@@ -134,6 +142,24 @@ const PAGE = `<!doctype html>
       <div class="row" style="justify-content:flex-end;">
         <button type="button" class="ghost" id="rCancel">Cancel</button>
         <button type="button" id="rSave">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Category dialog -->
+  <dialog id="catDlg">
+    <form method="dialog">
+      <h3 style="margin:.1rem 0 1rem;">Category for <code id="catSlug"></code></h3>
+      <fieldset>
+        <label><span>Category</span>
+          <input type="text" id="catInput" list="catList" placeholder="e.g. Investors" autocomplete="off" />
+        </label>
+        <datalist id="catList"></datalist>
+        <p class="allow">Group related pages together. Leave empty to make it “Uncategorized”. New categories are created just by typing one.</p>
+      </fieldset>
+      <div class="row" style="justify-content:flex-end;">
+        <button type="button" class="ghost" id="catCancel">Cancel</button>
+        <button type="button" id="catSave">Save</button>
       </div>
     </form>
   </dialog>
@@ -242,33 +268,87 @@ const PAGE = `<!doctype html>
       }
     }
 
+    // The full page list from the last load, kept so the category filter can
+    // re-render without another round trip.
+    let allPages = [];
+    const UNCATEGORIZED = 'Uncategorized';
+
+    function catOf(p) { return (p.category || '').trim(); }
+    function catLabel(c) { return c || UNCATEGORIZED; }
+
+    // Named categories A→Z, with the Uncategorized bucket last if present.
+    function sortedCats(pages) {
+      const set = new Set(pages.map(catOf));
+      const named = [...set].filter(Boolean).sort((a, b) => a.localeCompare(b));
+      return set.has('') ? [...named, ''] : named;
+    }
+
+    function refreshCategoryControls(pages) {
+      const cats = sortedCats(pages);
+      // Filter dropdown (preserve current selection when possible).
+      const cur = $('catFilter').value;
+      const opts = ['<option value="">All categories</option>']
+        .concat(cats.map((c) => '<option value="' + escapeHtml(catLabel(c)) + '">' + escapeHtml(catLabel(c)) + '</option>'));
+      $('catFilter').innerHTML = opts.join('');
+      if (cats.map(catLabel).includes(cur) || cur === '') $('catFilter').value = cur;
+      // Datalist of existing (named) categories for the editor.
+      $('catList').innerHTML = cats.filter(Boolean)
+        .map((c) => '<option value="' + escapeHtml(c) + '"></option>').join('');
+    }
+
+    function rowHtml(p) {
+      const slug = escapeHtml(p.slug);
+      const pill = p.protected
+        ? '<span class="pill restricted">Restricted</span>'
+        : '<span class="pill public">Public</span>';
+      const allow = (p.protected && p.allow && p.allow.length)
+        ? '<div class="allow">' + p.allow.map(escapeHtml).join(', ') + '</div>'
+        : (p.protected ? '<div class="allow muted">No one pre-approved</div>' : '');
+      const access = p.protected
+        ? '<button class="ghost" data-act="public" data-slug="' + slug + '">Make public</button> ' +
+          '<button class="ghost" data-act="edit" data-slug="' + slug + '">Edit access</button>'
+        : '<button data-act="restrict" data-slug="' + slug + '">Restrict</button>';
+      const catCell = catOf(p)
+        ? escapeHtml(catOf(p))
+        : '<span class="muted">' + UNCATEGORIZED + '</span>';
+      return '<tr>' +
+        '<td><a class="slug" href="/' + slug + '" target="_blank" rel="noopener">' + slug + '</a></td>' +
+        '<td>' + catCell + '</td>' +
+        '<td>' + pill + allow + '</td>' +
+        '<td><div class="row">' + access +
+          ' <button class="ghost" data-act="category" data-slug="' + slug + '" data-cat="' + escapeHtml(catOf(p)) + '">Category</button>' +
+        '</div></td>' +
+      '</tr>';
+    }
+
     function render(pages) {
       hide($('dashMsg'));
+      allPages = pages.slice();
       $('count').textContent = pages.length + (pages.length === 1 ? ' page' : ' pages');
+      refreshCategoryControls(allPages);
+      renderRows();
+    }
+
+    // Renders rows grouped under category headings, honoring the filter.
+    function renderRows() {
       const rows = $('rows');
-      if (!pages.length) {
-        rows.innerHTML = '<tr><td colspan="3" class="muted">No pages synced yet.</td></tr>';
+      const filter = $('catFilter').value; // '' = all; else a category label
+      if (!allPages.length) {
+        rows.innerHTML = '<tr><td colspan="4" class="muted">No pages synced yet.</td></tr>';
         return;
       }
-      rows.innerHTML = pages.map((p) => {
-        const slug = escapeHtml(p.slug);
-        const pill = p.protected
-          ? '<span class="pill restricted">Restricted</span>'
-          : '<span class="pill public">Public</span>';
-        const allow = (p.protected && p.allow && p.allow.length)
-          ? '<div class="allow">' + p.allow.map(escapeHtml).join(', ') + '</div>'
-          : (p.protected ? '<div class="allow muted">No one pre-approved</div>' : '');
-        const action = p.protected
-          ? '<button class="ghost" data-act="public" data-slug="' + slug + '">Make public</button> ' +
-            '<button class="ghost" data-act="edit" data-slug="' + slug + '">Edit access</button>'
-          : '<button data-act="restrict" data-slug="' + slug + '">Restrict</button>';
-        return '<tr>' +
-          '<td><a class="slug" href="/' + slug + '" target="_blank" rel="noopener">' + slug + '</a></td>' +
-          '<td>' + pill + allow + '</td>' +
-          '<td><div class="row">' + action + '</div></td>' +
-          '</tr>';
+      const cats = sortedCats(allPages).filter((c) => !filter || catLabel(c) === filter);
+      const html = cats.map((c) => {
+        const inCat = allPages.filter((p) => catOf(p) === c)
+          .sort((a, b) => a.slug.localeCompare(b.slug));
+        const heading = '<tr><td colspan="4" style="background:rgba(148,163,184,.12);font-weight:700;font-size:.8rem;letter-spacing:.02em;">' +
+          escapeHtml(catLabel(c)) + ' <span class="muted" style="font-weight:500;">· ' + inCat.length + '</span></td></tr>';
+        return heading + inCat.map(rowHtml).join('');
       }).join('');
+      rows.innerHTML = html || '<tr><td colspan="4" class="muted">No pages in this category.</td></tr>';
     }
+
+    document.getElementById('catFilter').addEventListener('change', renderRows);
 
     // ---- Actions -----------------------------------------------------------
     async function setAccess(slug, body) {
@@ -299,6 +379,38 @@ const PAGE = `<!doctype html>
 
       if (act === 'restrict' || act === 'edit') {
         openRestrict(slug, act === 'edit');
+      }
+
+      if (act === 'category') {
+        openCategory(slug, btn.dataset.cat || '');
+      }
+    });
+
+    // ---- Category dialog ---------------------------------------------------
+    const catDlg = $('catDlg');
+    let catSlugVal = '';
+
+    function openCategory(slug, current) {
+      catSlugVal = slug;
+      $('catSlug').textContent = slug;
+      $('catInput').value = current || '';
+      catDlg.showModal();
+      $('catInput').focus();
+    }
+
+    $('catCancel').addEventListener('click', () => catDlg.close());
+
+    $('catSave').addEventListener('click', async () => {
+      $('catSave').disabled = true;
+      try {
+        await setAccess(catSlugVal, { category: $('catInput').value.trim() });
+        catDlg.close();
+        showMsg($('dashMsg'), 'Category updated for ' + catSlugVal + '.', 'ok');
+        await loadPages();
+      } catch (err) {
+        showMsg($('dashMsg'), err.message, 'err');
+      } finally {
+        $('catSave').disabled = false;
       }
     });
 
