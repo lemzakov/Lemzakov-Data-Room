@@ -6,6 +6,7 @@
   "scripts": {
     "build": "node ./scripts/verify-sync-on-build.js",
     "diagnose": "node ./scripts/diagnose-drive.js",
+    "register-telegram": "node ./scripts/register-telegram-webhook.js",
     "test": "node --test test/*.test.js",
     "start": "vercel dev"
   },
