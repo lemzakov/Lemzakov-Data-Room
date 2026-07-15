@@ -253,10 +253,22 @@ token can ever mint a token.
 2. **Telegram bot**: create a bot with @BotFather → `TELEGRAM_BOT_TOKEN`. Message
    the bot, then read your chat id from
    `https://api.telegram.org/bot<TOKEN>/getUpdates` → `TELEGRAM_ADMIN_CHAT_ID`.
-3. **Register the webhook** (once), using a secret you also store in
-   `TELEGRAM_WEBHOOK_SECRET`:
+3. **Register the webhook** (once). The endpoint rejects any update whose secret
+   doesn't match the deployed `TELEGRAM_WEBHOOK_SECRET`, so the reliable way is to
+   register from the **same environment** the app runs with — then the two can't
+   drift and you never have to remember the secret:
    ```bash
-   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-domain>/api/telegram/webhook&secret_token=<SECRET>"
+   # pulls the deployed TELEGRAM_* + PAGE_DOMAINS, then registers with them
+   vercel env pull .env.local
+   npm run register-telegram        # the script auto-loads .env.local / .env
+   ```
+   The script reads `TELEGRAM_BOT_TOKEN` + `TELEGRAM_WEBHOOK_SECRET`, derives the
+   URL from `WEBHOOK_URL` or the first `PAGE_DOMAINS` host, sets
+   `allowed_updates` to `["message","callback_query"]`, and prints
+   `getWebhookInfo` to confirm. Inspect or remove it with `--info` / `--delete`.
+   Plain-curl equivalent (secret must match the env var by hand):
+   ```bash
+   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-domain>/api/telegram/webhook&secret_token=<SECRET>&allowed_updates=%5B%22message%22%2C%22callback_query%22%5D"
    ```
 
 ## Project portals (multi-page synced Drive folders)
