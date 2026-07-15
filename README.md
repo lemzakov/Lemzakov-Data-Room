@@ -260,7 +260,7 @@ token can ever mint a token.
    ```bash
    # pulls the deployed TELEGRAM_* + PAGE_DOMAINS, then registers with them
    vercel env pull .env.local
-   node -r dotenv/config scripts/register-telegram-webhook.js   # or: npm run register-telegram
+   npm run register-telegram        # the script auto-loads .env.local / .env
    ```
    The script reads `TELEGRAM_BOT_TOKEN` + `TELEGRAM_WEBHOOK_SECRET`, derives the
    URL from `WEBHOOK_URL` or the first `PAGE_DOMAINS` host, sets
