@@ -32,8 +32,9 @@ Page protection (public/restricted), Google sign-in & Telegram approvals (see "P
 - `GOOGLE_OAUTH_CLIENT_ID` + `GOOGLE_OAUTH_CLIENT_SECRET` - OAuth 2.0 Web client credentials used to sign visitors in. Add `https://<your-domain>/api/auth/google/callback` as an Authorized redirect URI in Google Cloud Console.
 - `GOOGLE_OAUTH_REDIRECT_URI` - optional override if the callback URL differs from `<request-origin>/api/auth/google/callback`.
 - `TELEGRAM_BOT_TOKEN` - bot token from [@BotFather](https://t.me/BotFather).
-- `TELEGRAM_ADMIN_CHAT_ID` - the chat id that should receive access requests (your own chat with the bot). Get it from `https://api.telegram.org/bot<TOKEN>/getUpdates` after messaging the bot.
+- `TELEGRAM_ADMIN_CHAT_ID` - the chat id that should receive access requests **and publish notifications**, and the *only* chat the bot menu answers (your own chat with the bot). Get it from `https://api.telegram.org/bot<TOKEN>/getUpdates` after messaging the bot.
 - `TELEGRAM_WEBHOOK_SECRET` - shared secret validating incoming webhook calls (set the same value when registering the webhook).
+- `PAGE_DOMAINS` - comma/space-separated hostnames a single-file page is reachable on, used to build the address list in publish notifications and the Telegram menu. Defaults to `data.lemzakov.com,data.wize.ae`.
 
 ### Recommended: service account (works with private folders)
 
@@ -65,7 +66,7 @@ in service-account mode, the `serviceAccountEmail` to share with.
 - `GET /api/auth/google/start` · `GET /api/auth/google/callback` - Google OAuth sign-in
 - `GET /api/auth/me` · `POST /api/auth/logout` - session helpers
 - `POST /api/access/request` - submit an access request (sends it to Telegram)
-- `POST /api/telegram/webhook` - receives Approve/Deny taps from the bot
+- `POST /api/telegram/webhook` - receives Approve/Deny taps **and** the private admin bot menu commands/navigation (owner-only)
 
 Remote MCP connector routes (OAuth-protected; see "Remote MCP connector" below):
 
@@ -129,6 +130,44 @@ live alongside the HTML in Redis, so re-syncing from Drive never resets them.
 
 The `/publish-page` skill (`.claude/skills/publish-page`) wraps the publish API;
 it needs `LDR_BASE_URL` and `LDR_ADMIN_TOKEN` in the environment.
+
+### Organizing pages with categories
+
+Single-file pages can be grouped into **categories** so a growing data room stays
+organized. A category is a free-form short label (e.g. `Investors`, `Marketing`)
+created implicitly the moment you assign it — there is nothing to pre-define.
+
+- In **`/admin`**, each page row has a **Category** button; the Single-file pages
+  table is grouped under category headings, with a **Category** filter dropdown to
+  focus on one group. Uncategorized pages fall under an "Uncategorized" bucket.
+- Category is **independent of access** — changing it never flips a page between
+  public and restricted, and it survives re-syncs (it lives at `pagemeta:<slug>`
+  in Redis, separate from the ACL).
+- The publish APIs accept an optional `category`:
+  ```bash
+  curl -X POST https://your-domain/api/admin/page \
+    -H 'Content-Type: application/json' -H "X-Admin-Token: $ADMIN_TOKEN" \
+    -d '{"slug":"investor-deck","category":"Investors"}'
+  ```
+  The MCP `publish_page` tool takes the same optional `category` argument, and
+  `list_pages` returns each page's `category`.
+
+### Telegram bot: publish alerts + a private page menu
+
+The same bot that approves access requests doubles as a **private admin console**
+for your pages. It only ever responds to `TELEGRAM_ADMIN_CHAT_ID` — every message
+and button tap from anyone else is refused, so the bot is yours alone.
+
+- **Publish notifications** — whenever a page's HTML is (re)published (via `/admin`,
+  the publish API, or either MCP server), the bot messages you the page's slug,
+  category, access state, and **every address it resolves to** (one per
+  `PAGE_DOMAINS` entry, e.g. `https://data.lemzakov.com/<slug>` **and**
+  `https://data.wize.ae/<slug>`).
+- **Menu navigation** — message the bot:
+  - `/start` or `/menu` → main menu (**All pages** · **Categories**)
+  - `/list` → a flat listing of every page with its addresses
+  - `/categories` → tap a **category**, then a **page**, to get its URLs
+- Delivery is best-effort: a Telegram outage never blocks or fails a publish.
 
 ### MCP server: upload HTML without Google Drive
 

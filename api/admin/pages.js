@@ -6,9 +6,7 @@
 // Backs the /admin dashboard, which renders the list and lets you flip a page
 // between public and restricted (via POST /api/admin/page).
 
-const { getRuntimeConfig } = require('../../lib/config');
-const { listSlugs } = require('../../lib/storage');
-const { getAcl } = require('../../lib/access');
+const { listPagesWithMeta } = require('../../lib/pages');
 const { isAdminAuthorized } = require('../../lib/admin');
 const { sendJson } = require('../../lib/http');
 
@@ -22,20 +20,7 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const { storagePrefix } = getRuntimeConfig();
-    const slugs = await listSlugs(storagePrefix);
-
-    const pages = await Promise.all(
-      slugs.map(async (slug) => {
-        const acl = await getAcl(slug);
-        return {
-          slug,
-          protected: Boolean(acl && acl.protected),
-          allow: (acl && acl.allow) || []
-        };
-      })
-    );
-
+    const pages = await listPagesWithMeta();
     return sendJson(res, 200, { ok: true, pages });
   } catch (error) {
     console.error('[admin/pages] failed', { message: error.message });
