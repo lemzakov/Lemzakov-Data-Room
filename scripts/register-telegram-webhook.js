@@ -1,9 +1,9 @@
 // Register (or inspect / delete) the Telegram webhook from the environment.
 //
-// The webhook endpoint rejects any update whose secret doesn't match the
-// deployed TELEGRAM_WEBHOOK_SECRET. This script calls setWebhook using the SAME
-// env var, so the two sides can never drift — you don't need to remember the
-// secret, only to run this with the same environment the app has.
+// You normally DON'T need this: the deploy build hook auto-registers the webhook
+// on every production deploy (see lib/telegram-webhook.js → ensureWebhookOnDeploy,
+// called from scripts/verify-sync-on-build.js). This CLI is for one-off local
+// use or debugging.
 //
 // Usage:
 //   node scripts/register-telegram-webhook.js            # set the webhook
@@ -11,20 +11,16 @@
 //   node scripts/register-telegram-webhook.js --delete   # remove the webhook
 //   npm run register-telegram -- --info
 //
-// Environment:
+// Environment (auto-loaded from .env.local then .env if present):
 //   TELEGRAM_BOT_TOKEN       (required) bot token from @BotFather
 //   TELEGRAM_WEBHOOK_SECRET  (recommended) shared secret; sent to Telegram AND
 //                            checked by /api/telegram/webhook — keep them equal
-//   WEBHOOK_URL              (optional) full webhook URL to register. If unset,
-//                            it is built as https://<first PAGE_DOMAINS host>/api/telegram/webhook
-//   PAGE_DOMAINS             (optional) used to derive the host when WEBHOOK_URL
-//                            is not given (defaults to data.lemzakov.com)
+//   WEBHOOK_URL              (optional) full webhook URL; else built from the
+//                            first PAGE_DOMAINS host
+//   PAGE_DOMAINS             (optional) used to derive the host (default data.lemzakov.com)
 //
-// The easiest way to guarantee the secret matches production is to pull the
-// deployed env first, then run this — the script auto-loads .env.local / .env
-// (no dotenv needed):
-//   vercel env pull .env.local && node scripts/register-telegram-webhook.js
-// (or just export the same TELEGRAM_* values you set in Vercel before running.)
+// Guarantee the secret matches production by pulling the deployed env first:
+//   vercel env pull .env.local && npm run register-telegram
 //
 // Zero dependencies — Node built-ins + global fetch (Node 18+). Secrets are
 // never printed.
@@ -65,51 +61,22 @@ function loadEnvFiles() {
 
 loadEnvFiles();
 
-const { getPageDomains } = require('../lib/config');
+const {
+  getWebhookInfo,
+  deleteWebhook,
+  setWebhookFromEnv,
+  ALLOWED_UPDATES
+} = require('../lib/telegram-webhook');
 
-const API_BASE = 'https://api.telegram.org';
-const WEBHOOK_PATH = '/api/telegram/webhook';
-const ALLOWED_UPDATES = ['message', 'callback_query'];
-
-function required(name) {
-  const value = String(process.env[name] || '').trim();
-  if (!value) {
-    console.error(`Missing ${name}. Set it in the environment and re-run.`);
+function requireToken() {
+  if (!String(process.env.TELEGRAM_BOT_TOKEN || '').trim()) {
+    console.error('Missing TELEGRAM_BOT_TOKEN. Set it in the environment (or .env.local) and re-run.');
     process.exit(1);
   }
-  return value;
 }
 
-// The URL Telegram should POST updates to. Explicit WEBHOOK_URL wins; otherwise
-// build it from the first configured page domain.
-function resolveWebhookUrl() {
-  const explicit = String(process.env.WEBHOOK_URL || '').trim();
-  if (explicit) {
-    return explicit.replace(/\/+$/, '').endsWith(WEBHOOK_PATH)
-      ? explicit
-      : `${explicit.replace(/\/+$/, '')}${WEBHOOK_PATH}`;
-  }
-  const host = getPageDomains()[0];
-  return `https://${host}${WEBHOOK_PATH}`;
-}
-
-async function callApi(token, method, payload) {
-  const res = await fetch(`${API_BASE}/bot${token}/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload || {})
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data.ok) {
-    throw new Error(`${method} failed: HTTP ${res.status} ${JSON.stringify(data)}`);
-  }
-  return data.result;
-}
-
-async function showInfo(token) {
-  const info = await callApi(token, 'getWebhookInfo');
-  // Redact nothing sensitive here (getWebhookInfo returns no secret), but keep
-  // the output focused on what tells you whether it's healthy.
+async function showInfo() {
+  const info = await getWebhookInfo();
   console.log(JSON.stringify(info, null, 2));
   if (info.last_error_message) {
     console.log(`\n=> Last error: ${info.last_error_message}`);
@@ -121,36 +88,26 @@ async function showInfo(token) {
 }
 
 async function main() {
-  const token = required('TELEGRAM_BOT_TOKEN');
+  requireToken();
   const args = process.argv.slice(2);
 
   if (args.includes('--info')) {
-    await showInfo(token);
+    await showInfo();
     return;
   }
 
   if (args.includes('--delete')) {
-    await callApi(token, 'deleteWebhook', { drop_pending_updates: false });
+    await deleteWebhook();
     console.log('=> Webhook deleted.');
     return;
   }
 
-  const url = resolveWebhookUrl();
-  const secret = String(process.env.TELEGRAM_WEBHOOK_SECRET || '').trim();
-
-  const payload = { url, allowed_updates: ALLOWED_UPDATES };
-  if (secret) {
-    payload.secret_token = secret;
-  } else {
-    console.warn('Warning: TELEGRAM_WEBHOOK_SECRET is empty — registering without a secret is not recommended.');
-  }
-
-  await callApi(token, 'setWebhook', payload);
-  console.log(`=> Webhook set to ${url}`);
+  const result = await setWebhookFromEnv();
+  console.log(`=> Webhook set to ${result.url}`);
   console.log(`=> allowed_updates: [${ALLOWED_UPDATES.join(', ')}]`);
-  console.log(`=> secret_token: ${secret ? 'set (matches TELEGRAM_WEBHOOK_SECRET)' : 'NONE'}`);
+  console.log(`=> secret_token: ${result.hasSecret ? 'set (matches TELEGRAM_WEBHOOK_SECRET)' : 'NONE'}`);
   console.log('\nVerifying…\n');
-  await showInfo(token);
+  await showInfo();
 }
 
 main().catch((error) => {

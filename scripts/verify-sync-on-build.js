@@ -1,5 +1,6 @@
 const { runSync, diagnose } = require('../lib/sync');
 const { closeRedis } = require('../lib/storage');
+const { ensureWebhookOnDeploy } = require('../lib/telegram-webhook');
 
 // Runs during `vercel build`. A Drive sync problem should NOT block the whole
 // deployment (that also takes /api/diagnose and already-synced pages offline).
@@ -11,6 +12,15 @@ const { closeRedis } = require('../lib/storage');
 // build hang forever after the work is done. We close Redis and force-exit.
 async function run() {
   console.log('[deploy] Starting sync verification during build');
+
+  // Make sure the Telegram webhook is registered against this deployment, using
+  // the deployed env (so the secret always matches). Production builds only;
+  // best-effort — never fails the deploy.
+  try {
+    await ensureWebhookOnDeploy();
+  } catch (error) {
+    console.error('[deploy] Telegram webhook step errored (deploy continues):', error.message);
+  }
 
   try {
     const result = await runSync();
