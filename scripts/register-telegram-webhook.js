@@ -21,12 +21,49 @@
 //                            is not given (defaults to data.lemzakov.com)
 //
 // The easiest way to guarantee the secret matches production is to pull the
-// deployed env first, then run this:
-//   vercel env pull .env.local && node -r dotenv/config scripts/register-telegram-webhook.js
-// (or just export the same TELEGRAM_* values you set in Vercel before running).
+// deployed env first, then run this — the script auto-loads .env.local / .env
+// (no dotenv needed):
+//   vercel env pull .env.local && node scripts/register-telegram-webhook.js
+// (or just export the same TELEGRAM_* values you set in Vercel before running.)
 //
 // Zero dependencies — Node built-ins + global fetch (Node 18+). Secrets are
 // never printed.
+
+const fs = require('fs');
+const path = require('path');
+
+// Minimal .env loader (no dotenv dependency). Loads .env.local then .env from
+// the repo root, without overriding variables already present in the
+// environment. Just enough to parse `KEY=value` / `KEY="value"` lines.
+function loadEnvFiles() {
+  for (const file of ['.env.local', '.env']) {
+    const full = path.join(process.cwd(), file);
+    let raw;
+    try {
+      raw = fs.readFileSync(full, 'utf-8');
+    } catch {
+      continue; // file absent — fine
+    }
+    for (const line of raw.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq === -1) continue;
+      const key = trimmed.slice(0, eq).trim();
+      if (!key || process.env[key] !== undefined) continue; // real env wins
+      let value = trimmed.slice(eq + 1).trim();
+      if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+      ) {
+        value = value.slice(1, -1);
+      }
+      process.env[key] = value;
+    }
+  }
+}
+
+loadEnvFiles();
 
 const { getPageDomains } = require('../lib/config');
 
