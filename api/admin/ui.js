@@ -54,6 +54,24 @@ const PAGE = `<!doctype html>
     dialog { border: 1px solid #e5e7eb; border-radius: .75rem; padding: 1.25rem; max-width: 28rem; width: 92%; color: inherit; }
     dialog::backdrop { background: rgba(0,0,0,.4); }
     fieldset { border: 0; padding: 0; margin: 0 0 .75rem; }
+    dialog.wide { max-width: 46rem; }
+    .stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr)); gap: .6rem; margin: .25rem 0 1rem; }
+    .tile { border: 1px solid #e5e7eb; border-radius: .6rem; padding: .6rem .7rem; }
+    .tile .n { font-size: 1.35rem; font-weight: 800; line-height: 1.1; }
+    .tile .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; margin-top: .15rem; }
+    .bars { margin: .2rem 0 1rem; }
+    .bar-row { display: grid; grid-template-columns: 9.5rem 1fr 2.5rem; gap: .5rem; align-items: center; font-size: .82rem; margin: .18rem 0; }
+    .bar-row .k { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .bar-track { background: rgba(148,163,184,.18); border-radius: 999px; height: .55rem; overflow: hidden; }
+    .bar-fill { background: #2563eb; height: 100%; border-radius: 999px; }
+    .bar-row .c { text-align: right; color: #6b7280; font-variant-numeric: tabular-nums; }
+    .sub-h { font-size: .78rem; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; margin: 1rem 0 .35rem; font-weight: 700; }
+    .recent { width: 100%; border-collapse: collapse; font-size: .8rem; }
+    .recent th, .recent td { text-align: left; padding: .35rem .4rem; border-bottom: 1px solid #eef1f4; white-space: nowrap; }
+    .recent td.who { white-space: normal; }
+    .scrolls { max-height: 20rem; overflow: auto; }
+    .who-badge { font-size: .66rem; padding: .05rem .35rem; border-radius: 999px; background: #eef2ff; color: #3730a3; margin-left: .3rem; }
+    .views-hint { color: #6b7280; font-size: .74rem; margin-top: .2rem; }
   </style>
 </head>
 <body>
@@ -164,6 +182,15 @@ const PAGE = `<!doctype html>
     </form>
   </dialog>
 
+  <!-- Stats dialog -->
+  <dialog id="statsDlg" class="wide">
+    <div class="topbar" style="margin-bottom:.5rem;">
+      <h3 style="margin:0;">Opens — <code id="sSlug"></code></h3>
+      <button type="button" class="ghost" id="sClose">Close</button>
+    </div>
+    <div id="sBody"><p class="muted">Loading…</p></div>
+  </dialog>
+
   <!-- Project access dialog -->
   <dialog id="accessDlg">
     <form method="dialog">
@@ -250,10 +277,28 @@ const PAGE = `<!doctype html>
     $('refreshBtn').addEventListener('click', () => { loadPages(); loadProjects(); });
 
     // ---- Data --------------------------------------------------------------
+    // slug -> { views, uniques, lastSeen } for inline open counts.
+    let statsMap = {};
+
+    async function loadStatsOverview() {
+      try {
+        const r = await fetch('/api/admin/stats', { headers: authHeaders() });
+        if (!r.ok) return;
+        const data = await r.json();
+        if (!data.ok) return;
+        const map = {};
+        (data.overview || []).forEach((o) => { map[o.slug] = o; });
+        statsMap = map;
+      } catch {}
+    }
+
     // Returns false on auth failure so the login flow can react.
     async function loadPages(silent) {
       try {
-        const r = await fetch('/api/admin/pages', { headers: authHeaders() });
+        const [r] = await Promise.all([
+          fetch('/api/admin/pages', { headers: authHeaders() }),
+          loadStatsOverview()
+        ]);
         if (r.status === 401) return false;
         const data = await r.json();
         if (!r.ok || !data.ok) {
@@ -311,11 +356,17 @@ const PAGE = `<!doctype html>
       const catCell = catOf(p)
         ? escapeHtml(catOf(p))
         : '<span class="muted">' + UNCATEGORIZED + '</span>';
+      const st = statsMap[p.slug];
+      const opens = st
+        ? '<div class="views-hint">' + st.views + (st.views === 1 ? ' open' : ' opens') +
+          ' · ' + st.uniques + (st.uniques === 1 ? ' visitor' : ' visitors') + '</div>'
+        : '<div class="views-hint muted">no opens yet</div>';
       return '<tr>' +
-        '<td><a class="slug" href="/' + slug + '" target="_blank" rel="noopener">' + slug + '</a></td>' +
+        '<td><a class="slug" href="/' + slug + '" target="_blank" rel="noopener">' + slug + '</a>' + opens + '</td>' +
         '<td>' + catCell + '</td>' +
         '<td>' + pill + allow + '</td>' +
         '<td><div class="row">' + access +
+          ' <button class="ghost" data-act="stats" data-slug="' + slug + '">Stats</button>' +
           ' <button class="ghost" data-act="category" data-slug="' + slug + '" data-cat="' + escapeHtml(catOf(p)) + '">Category</button>' +
         '</div></td>' +
       '</tr>';
@@ -384,6 +435,10 @@ const PAGE = `<!doctype html>
       if (act === 'category') {
         openCategory(slug, btn.dataset.cat || '');
       }
+
+      if (act === 'stats') {
+        openStats(slug);
+      }
     });
 
     // ---- Category dialog ---------------------------------------------------
@@ -413,6 +468,94 @@ const PAGE = `<!doctype html>
         $('catSave').disabled = false;
       }
     });
+
+    // ---- Stats dialog ------------------------------------------------------
+    const statsDlg = $('statsDlg');
+    $('sClose').addEventListener('click', () => statsDlg.close());
+
+    function fmtWhen(iso) {
+      if (!iso) return '—';
+      try { return new Date(iso).toLocaleString(); } catch { return iso; }
+    }
+    function fmtDur(ms) {
+      const s = Math.round((Number(ms) || 0) / 1000);
+      if (s <= 0) return '—';
+      if (s < 60) return s + 's';
+      const m = Math.floor(s / 60), r = s % 60;
+      return m + 'm' + (r ? ' ' + r + 's' : '');
+    }
+    function tile(n, l) {
+      return '<div class="tile"><div class="n">' + escapeHtml(String(n)) + '</div><div class="l">' + escapeHtml(l) + '</div></div>';
+    }
+    function bars(title, pairs) {
+      if (!pairs || !pairs.length) return '';
+      const max = pairs.reduce((m, p) => Math.max(m, p.count), 0) || 1;
+      const rows = pairs.map((p) => {
+        const w = Math.max(3, Math.round((p.count / max) * 100));
+        return '<div class="bar-row">' +
+          '<div class="k" title="' + escapeHtml(p.key) + '">' + escapeHtml(p.key || '—') + '</div>' +
+          '<div class="bar-track"><div class="bar-fill" style="width:' + w + '%"></div></div>' +
+          '<div class="c">' + p.count + '</div>' +
+        '</div>';
+      }).join('');
+      return '<div class="sub-h">' + escapeHtml(title) + '</div><div class="bars">' + rows + '</div>';
+    }
+
+    async function openStats(slug) {
+      $('sSlug').textContent = slug;
+      $('sBody').innerHTML = '<p class="muted">Loading…</p>';
+      statsDlg.showModal();
+      try {
+        const r = await fetch('/api/admin/stats?slug=' + encodeURIComponent(slug), { headers: authHeaders() });
+        const data = await r.json();
+        if (!r.ok || !data.ok) { $('sBody').innerHTML = '<p class="msg err">' + escapeHtml(data.error || 'Failed to load stats.') + '</p>'; return; }
+        $('sBody').innerHTML = renderStats(data.stats || {}, data.recent || []);
+      } catch {
+        $('sBody').innerHTML = '<p class="msg err">Network error loading stats.</p>';
+      }
+    }
+
+    function renderStats(s, recent) {
+      if (!s.views) {
+        return '<p class="muted">No opens recorded yet. Stats appear here once someone opens this page.</p>';
+      }
+      const tiles = '<div class="stat-grid">' +
+        tile(s.views, 'Opens') +
+        tile(s.uniques, 'Unique visitors') +
+        tile(fmtDur(s.avgDwellMs), 'Avg. time') +
+        tile((s.byCountry && s.byCountry.length) || 0, 'Countries') +
+      '</div>';
+      const seen = '<p class="allow">First open ' + escapeHtml(fmtWhen(s.firstSeen)) +
+        ' · Last open ' + escapeHtml(fmtWhen(s.lastSeen)) + '</p>';
+
+      const viewers = bars('Top viewers (signed-in email)', s.byEmail);
+      const countries = bars('Countries', s.byCountry);
+      const refs = bars('Referrers', s.byReferrer);
+      const devices = bars('Devices', s.byDevice);
+
+      const recentRows = (recent || []).map((e) => {
+        const who = e.email
+          ? '<b>' + escapeHtml(e.email) + '</b>' + (e.name ? ' <span class="muted">(' + escapeHtml(e.name) + ')</span>' : '')
+          : '<span class="muted">anon ' + escapeHtml((e.visitorId || '').slice(0, 6)) + '</span>';
+        const badge = e.newVisitor ? '<span class="who-badge">new</span>' : '';
+        const loc = [e.city, e.country].filter(Boolean).map(escapeHtml).join(', ') || '—';
+        const eng = (e.dwellMs ? fmtDur(e.dwellMs) : '—') + (e.scrollPct ? ' · ' + e.scrollPct + '%' : '');
+        return '<tr>' +
+          '<td>' + escapeHtml(fmtWhen(e.at)) + '</td>' +
+          '<td class="who">' + who + badge + '</td>' +
+          '<td>' + loc + '</td>' +
+          '<td>' + escapeHtml(e.device || '—') + '</td>' +
+          '<td>' + escapeHtml(e.referrerHost || '—') + '</td>' +
+          '<td>' + eng + '</td>' +
+        '</tr>';
+      }).join('');
+      const recentTable = '<div class="sub-h">Recent opens (' + (recent || []).length + ')</div>' +
+        '<div class="scrolls"><table class="recent"><thead><tr>' +
+        '<th>When</th><th>Who</th><th>Location</th><th>Device</th><th>Referrer</th><th>Time · scroll</th>' +
+        '</tr></thead><tbody>' + (recentRows || '<tr><td colspan="6" class="muted">No recent opens.</td></tr>') + '</tbody></table></div>';
+
+      return tiles + seen + viewers + countries + refs + devices + recentTable;
+    }
 
     // ---- Restrict dialog ---------------------------------------------------
     const dlg = $('restrictDlg');
