@@ -3,6 +3,8 @@ const { readHtml } = require('../lib/storage');
 const { getAcl, isAllowed } = require('../lib/access');
 const { getSessionFromRequest } = require('../lib/session');
 const { injectSavePdfButton } = require('../lib/save-pdf');
+const { recordOpen } = require('../lib/analytics');
+const { injectAnalyticsBeacon } = require('../lib/analytics-beacon');
 
 module.exports = async function handler(req, res) {
   if (req.method !== 'GET') {
@@ -19,11 +21,13 @@ module.exports = async function handler(req, res) {
 
     // Access control: a page with an `acl` record marked protected requires a
     // valid session whose email is on the allow list. Pages with no record stay
-    // public (backward compatible).
+    // public (backward compatible). We resolve the session up front so a
+    // signed-in visitor can be personalised in analytics even on public pages.
     const acl = await getAcl(slug);
+    const current = await getSessionFromRequest(req);
+    const session = (current && current.session) || null;
+    const email = session && session.email;
     if (acl && acl.protected) {
-      const current = await getSessionFromRequest(req);
-      const email = current && current.session && current.session.email;
       if (!isAllowed(email, acl)) {
         res.setHeader('Cache-Control', 'no-store');
         res.statusCode = 302;
@@ -43,12 +47,23 @@ module.exports = async function handler(req, res) {
       return res.status(404).send('HTML file not found');
     }
 
+    // Record this open (who / where / device / referrer) and mint the visitor
+    // cookie BEFORE sending the body so its Set-Cookie header sticks. Guarded:
+    // analytics never blocks or fails page delivery.
+    const eventId = await recordOpen(req, res, {
+      slug,
+      session,
+      type: 'single',
+      protectedPage: Boolean(acl && acl.protected)
+    });
+
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     if (acl && acl.protected) {
       // Never let a shared cache store a protected page.
       res.setHeader('Cache-Control', 'private, no-store');
     }
-    return res.status(200).send(injectSavePdfButton(html));
+    const body = injectAnalyticsBeacon(injectSavePdfButton(html), { slug, eventId });
+    return res.status(200).send(body);
   } catch (error) {
     console.error('Failed to load HTML', {
       slug,

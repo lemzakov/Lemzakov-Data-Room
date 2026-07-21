@@ -59,6 +59,8 @@ in service-account mode, the `serviceAccountEmail` to share with.
 - `GET /secret-refresh` - web form for manual sync trigger
 - `GET /admin` - admin dashboard: sign in with username `admin` + `ADMIN_TOKEN`, see every page, and flip any page between public and restricted
 - `GET /api/admin/pages` - list every stored page with its access state (admin token required)
+- `GET /api/admin/stats` - page-open analytics: overview across all pages, or `?slug=` for one page's breakdowns + recent opens (admin token required)
+- `POST /api/stat/ping` - viewer-facing engagement beacon (dwell time + scroll depth); no auth, always answers `204`
 - `GET /<slug>` - render stored HTML from KV. If the page is restricted: redirects to Google sign-in when not signed in, or to `/request-access` when signed in but not approved.
 - `GET /login` - convenience redirect into Google sign-in
 - `GET /request-access` - page with the "Request access" button for restricted pages
@@ -151,6 +153,53 @@ created implicitly the moment you assign it — there is nothing to pre-define.
   ```
   The MCP `publish_page` tool takes the same optional `category` argument, and
   `list_pages` returns each page's `category`.
+
+### Page-open analytics (who opened what, when, from where)
+
+Every page open is measured server-side and surfaced per page in **`/admin`**
+(the **Stats** button on each single-file page row, plus an inline
+"N opens · M visitors" under each slug). Recording happens in the serve path,
+so it can't be blocked by ad-blockers and captures every open — including who
+is signed in.
+
+Each open is personalised as much as the request allows:
+
+- **Who** — for **restricted** pages, the Google-verified **email + name**; for
+  everyone, a persistent `ldr_vid` visitor cookie (~400 days, httpOnly) that
+  recognises **repeat opens** and counts **unique visitors**, even anonymous
+  ones on public pages.
+- **Where** — **country / region / city / timezone** from Vercel's edge geo
+  headers, plus the client IP.
+- **What** — **device / browser / OS** parsed from the User-Agent, and the
+  **referrer** source (e.g. `linkedin.com`, `t.co`, `direct`).
+- **How long** — a tiny injected **beacon** reports **active dwell time**
+  (paused while the tab is hidden) and **scroll depth**, plus language and
+  screen size. It uses `navigator.sendBeacon`, so the reading time survives the
+  page being closed. Hidden in print/PDF output.
+- **When** — timestamp, with per-day / per-country / per-referrer / per-viewer /
+  per-device breakdowns.
+
+The **Stats** dialog shows headline tiles (opens, unique visitors, average
+time, countries), first/last open, top viewers by email, country / referrer /
+device bar charts, and a **Recent opens** table (time · who · location · device
+· referrer · time-on-page · scroll).
+
+Storage is in Redis (`stat:*` keys); per-open detail records carry a ~6-month
+TTL and the recent-opens index is capped, so the footprint stays bounded.
+Recording **never** blocks or fails page delivery — a Redis hiccup degrades to
+"no stats", not an error. Turn the whole feature off with `ANALYTICS_DISABLED=1`.
+
+APIs (admin token required, same as the rest of `/api/admin/*`):
+
+```bash
+# overview across every page that has opens
+curl https://your-domain/api/admin/stats -H "X-Admin-Token: $ADMIN_TOKEN"
+# one page's breakdowns + recent opens
+curl "https://your-domain/api/admin/stats?slug=investor-deck" -H "X-Admin-Token: $ADMIN_TOKEN"
+```
+
+`POST /api/stat/ping` is the viewer-facing beacon receiver (no auth; it only
+records clamped engagement values and always answers `204`).
 
 ### Telegram bot: publish alerts + a private page menu
 
