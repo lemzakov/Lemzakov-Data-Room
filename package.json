@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/lemzakov/Lemzakov-Data-Room#readme",
   "dependencies": {
+    "@vercel/blob": "^2.8.0",
     "redis": "^6.0.0"
   }
 }
