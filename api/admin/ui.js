@@ -72,6 +72,11 @@ const PAGE = `<!doctype html>
     .scrolls { max-height: 20rem; overflow: auto; }
     .who-badge { font-size: .66rem; padding: .05rem .35rem; border-radius: 999px; background: #eef2ff; color: #3730a3; margin-left: .3rem; }
     .views-hint { color: #6b7280; font-size: .74rem; margin-top: .2rem; }
+    /* Which store serves a page. Informational only — visitors see no difference. */
+    .store-badge { font-size: .62rem; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; padding: .05rem .35rem; border-radius: .3rem; margin-left: .35rem; vertical-align: middle; }
+    .store-badge.blob { background: #ecfdf5; color: #065f46; }
+    .store-badge.redis { background: #fef3c7; color: #92400e; }
+    .store-badge.both { background: #eff6ff; color: #1e40af; }
   </style>
 </head>
 <body>
@@ -341,6 +346,22 @@ const PAGE = `<!doctype html>
         .map((c) => '<option value="' + escapeHtml(c) + '"></option>').join('');
     }
 
+    // Where a page's HTML actually lives. Pages published before the Vercel
+    // Blob cutover were left in Redis rather than migrated; both stores are
+    // read on every request, so this is bookkeeping, not behaviour.
+    const STORE_LABELS = {
+      blob: { text: 'Blob', title: 'Stored in Vercel Blob (private store)' },
+      redis: { text: 'Redis', title: 'Legacy page — still served from Redis, not migrated' },
+      both: { text: 'Blob + Redis', title: 'Rewritten to Blob; Blob serves it and an old Redis copy remains' }
+    };
+
+    function storeBadge(p) {
+      const meta = STORE_LABELS[p.store];
+      if (!meta) return '';
+      return '<span class="store-badge ' + escapeHtml(p.store) + '" title="' +
+        escapeHtml(meta.title) + '">' + escapeHtml(meta.text) + '</span>';
+    }
+
     function rowHtml(p) {
       const slug = escapeHtml(p.slug);
       const pill = p.protected
@@ -362,7 +383,7 @@ const PAGE = `<!doctype html>
           ' · ' + st.uniques + (st.uniques === 1 ? ' visitor' : ' visitors') + '</div>'
         : '<div class="views-hint muted">no opens yet</div>';
       return '<tr>' +
-        '<td><a class="slug" href="/' + slug + '" target="_blank" rel="noopener">' + slug + '</a>' + opens + '</td>' +
+        '<td><a class="slug" href="/' + slug + '" target="_blank" rel="noopener">' + slug + '</a>' + storeBadge(p) + opens + '</td>' +
         '<td>' + catCell + '</td>' +
         '<td>' + pill + allow + '</td>' +
         '<td><div class="row">' + access +

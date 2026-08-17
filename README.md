@@ -1,6 +1,6 @@
 # Lemzakov-Data-Room
 
-Vercel app that syncs HTML from Google Drive into Vercel Redis and serves it. Two flows share the same stack:
+Vercel app that syncs HTML from Google Drive into Vercel storage and serves it. Two flows share the same stack:
 
 1. **Single-file pages** — each `.html` in one Drive folder is served by slug:
    - `https://your-domain/<html-file-name-without-.html>`
@@ -21,10 +21,38 @@ Required environment variables:
   - `GOOGLE_SERVICE_ACCOUNT_JSON` (**recommended**) - service account key, raw JSON or base64-encoded JSON, **or**
   - `GOOGLE_API_KEY` - API key (only works for fully public folders; cannot reliably enumerate folder contents)
 - `REDIS_URL` (provided by the Vercel Redis integration, for example `redis://...` or `rediss://...`)
+- `BLOB_READ_WRITE_TOKEN` (provided by the Vercel Blob integration) — see [Where content is stored](#where-content-is-stored)
 
 Optional:
 
 - `SYNC_SECRET` - required token for `/api/sync`, `/api/diagnose` and `/secret-refresh?run=1`
+
+## Where content is stored
+
+Content lives in **two stores at once**, and which one a given page uses is
+invisible to visitors.
+
+| | Store | What is in it |
+|---|---|---|
+| **New writes** | Vercel Blob (private) | Every page and project file written since the cutover |
+| **Back catalogue** | Redis | Pages and project files published before the cutover — deliberately **not** migrated |
+| **Always Redis** | Redis | ACLs, sessions, project config, page categories, analytics |
+
+Reads query both stores concurrently and prefer Blob, so a pre-cutover page
+serves from Redis exactly as it always did, and nothing had to be moved. Writes
+only ever go to Blob (or to Redis if `BLOB_READ_WRITE_TOKEN` is unset, which
+restores the old behaviour wholesale).
+
+`/admin` labels every page with the store that serves it — `Blob`, `Redis`, or
+`Blob + Redis` for a legacy page that has since been re-synced or re-published
+(Blob serves it; the Redis copy is an inert leftover).
+
+**The Blob store must be private.** Private blobs have no publicly reachable URL
+and are readable only through the read-write token, so every byte still leaves
+the app via `api/html.js` or `lib/project-serve.js`, where the Google sign-in
+and allow-list checks live. A public store would hand out permanent
+unauthenticated URLs and bypass page-level access control entirely. Access
+management is unchanged by the move.
 
 Page protection (public/restricted), Google sign-in & Telegram approvals (see "Protecting pages" below):
 
@@ -334,9 +362,13 @@ whole folder — recursively, including subfolders and static assets — at
 plus a per-project allow list. This is separate from, and does not affect, the
 single-file flow above.
 
-**Persistence:** Redis (the project's existing durable store). Each project is
-stored at `project:<slug>`, indexed in the `projects:index` set, with files
-mirrored under `projfile:<slug>:<relPath>` and sync logs at `projectlog:<slug>`.
+**Persistence:** project metadata stays in Redis — each project at
+`project:<slug>`, indexed in the `projects:index` set, with sync logs at
+`projectlog:<slug>`. The mirrored **files** follow the two-store rule above:
+new syncs write raw bytes to Vercel Blob at `projfile/<slug>/<relPath>`, while
+anything synced before the cutover stays in Redis at `projfile:<slug>:<relPath>`
+as a base64 envelope. Reads check both, and a delete clears both, so a file
+removed upstream in Drive stops serving regardless of where it landed.
 
 ### How a private Drive folder reaches the service account
 
