@@ -1,7 +1,8 @@
 // Admin endpoint to publish a page and/or set its access control.
 //
-//   GET  /api/admin/page?slug=<slug>     -> read current access record
-//   POST /api/admin/page                 -> upsert page html and/or access
+//   GET    /api/admin/page?slug=<slug>   -> read current access record
+//   POST   /api/admin/page               -> upsert page html and/or access
+//   DELETE /api/admin/page?slug=<slug>   -> permanently remove the page
 //
 // Body for POST:
 //   {
@@ -18,6 +19,7 @@ const { getRuntimeConfig, pageUrls } = require('../../lib/config');
 const { saveHtml } = require('../../lib/storage');
 const { getAcl, setAcl, normalizeSlug } = require('../../lib/access');
 const { getCategory, setPageCategory } = require('../../lib/page-meta');
+const { deletePage, pageExists } = require('../../lib/page-delete');
 const { isAdminAuthorized } = require('../../lib/admin');
 const { readJsonBody, sendJson } = require('../../lib/http');
 const telegram = require('../../lib/telegram');
@@ -37,6 +39,29 @@ module.exports = async function handler(req, res) {
       allow: (acl && acl.allow) || [],
       category: category || ''
     });
+  }
+
+  // Deleting is the one admin action that reclaims storage rather than
+  // consuming it, so it keeps working while Redis is at maxmemory: DEL and SREM
+  // are not denyoom commands.
+  if (req.method === 'DELETE') {
+    if (!isAdminAuthorized(req)) {
+      return sendJson(res, 401, { ok: false, error: 'Unauthorized' });
+    }
+    const slug = normalizeSlug(req.query.slug || '');
+    if (!slug) return sendJson(res, 400, { ok: false, error: 'Missing slug' });
+
+    try {
+      if (!(await pageExists(slug))) {
+        return sendJson(res, 404, { ok: false, error: `No page named "${slug}"` });
+      }
+      const result = await deletePage(slug);
+      console.log('[admin/page] deleted', result);
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (error) {
+      console.error('[admin/page] delete failed', { slug, message: error.message });
+      return sendJson(res, 500, { ok: false, error: error.message });
+    }
   }
 
   if (req.method !== 'POST') {
