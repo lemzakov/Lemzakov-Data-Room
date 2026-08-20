@@ -66,11 +66,14 @@ test('publish_page saves html and writes the ACL (restricted via allow)', async 
   assert.match(res.content[0].text, /"published": true/);
 });
 
-test('publish_page defaults to public when no access given', async () => {
+test('publish_page defaults a NEW page to public when no access given', async () => {
   const deps = {
     getRuntimeConfig: () => ({ storagePrefix: 'html' }),
     saveHtml: async () => {},
     setAcl: async (slug, opts) => ({ protected: opts.protected, allow: opts.allow }),
+    // No existing access record — this slug has never been published before.
+    // A page that DOES have one keeps it; see test/publish-preserves-access.
+    getAcl: async () => null,
     getCategory: async () => '',
     notifyPagePublished: async () => {}
   };
@@ -121,6 +124,7 @@ test('publish_page stores a category and notifies with page addresses', async ()
     getRuntimeConfig: () => ({ storagePrefix: 'html' }),
     saveHtml: async () => { saved.push(true); },
     setAcl: async (slug, opts) => ({ protected: opts.protected, allow: opts.allow }),
+    getAcl: async () => null,
     setPageCategory: async (slug, category) => { cats.push({ slug, category }); return { category }; },
     getCategory: async () => '',
     pageUrls: (slug) => [`https://data.lemzakov.com/${slug}`, `https://data.wize.ae/${slug}`],
