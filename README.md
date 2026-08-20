@@ -472,3 +472,54 @@ what's wrong:
 ## Logs
 
 Sync flow logs Google Drive request/response metadata, uploaded files, and detailed failures with `console.log` / `console.error` (visible in Vercel function logs).
+
+## Runbook: Redis "OOM command not allowed"
+
+Symptom: writes fail with `OOM command not allowed when used memory > 'maxmemory'`
+while pages still load. Redis has hit its memory ceiling under a `noeviction`
+policy, so it rejects every command that could grow memory and permits the rest.
+
+**What breaks.** Reads are unaffected, so public pages keep serving and existing
+sessions keep working. Everything that writes fails:
+
+| Path | Effect |
+|---|---|
+| `createSession`, `oauthstate:*` | **New Google sign-ins fail** — restricted pages and project portals are unreachable for anyone not already holding a session cookie |
+| `setAcl` (`set_page_access`) | Access changes rejected |
+| `setPageCategory`, access requests, MCP OAuth, project config | Rejected |
+| Analytics | Silently stops recording — `recordOpen` is guarded and never breaks page delivery |
+
+**Why the Blob change alone is not the fix.** Moving new writes to Blob stops
+Redis *growing*; it frees nothing already there. Redis stays full until data is
+removed.
+
+### Clearing it
+
+`DEL` is not a `denyoom` command, so the drain runs while the store is still
+full — no plan upgrade needed first.
+
+```bash
+npm run drain -- --report          # census: keys and MB per class, deletes nothing
+npm run drain -- --events          # dry run
+npm run drain -- --events --apply  # drop analytics detail records
+```
+
+Every pass is a dry run until `--apply`. Order matters:
+
+1. **`--events`** — deletes `stat:ev:*` analytics detail records. Derived,
+   already TTL'd data; no Blob copy is made. Safe at any time, no deploy needed.
+   Aggregate counters behind `/admin` are left alone. Try this first.
+2. **Deploy the Blob branch**, then confirm a page still serves. Until the
+   dual-read code is live, readers consult Redis only, and steps 3–4 would take
+   pages offline.
+3. **`--projfiles`** — copies `projfile:*` to Blob and deletes the Redis copy.
+   Usually the largest consumer: these are base64 envelopes, ~33% larger than
+   the bytes they hold.
+4. **`--html`** — same for `html:*`.
+
+Steps 3 and 4 each verify the Blob copy byte-for-byte and skip the delete if it
+does not match, so a failed upload cannot cost content. Both need
+`BLOB_READ_WRITE_TOKEN`; step 1 needs only `REDIS_URL`.
+
+Raising `maxmemory` on the Redis plan is the other lever — instant relief, no
+code, but the growth resumes unless new writes are going to Blob.
