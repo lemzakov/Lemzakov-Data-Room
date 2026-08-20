@@ -188,8 +188,8 @@ test('listPagesWithMeta exposes the store alongside access and category', async 
       all: ['legacy-page', 'new-page']
     }),
     storeLabel,
-    getAcl: async (slug) => (slug === 'legacy-page' ? { protected: true, allow: ['a@x.com'] } : null),
-    getCategory: async () => 'Reports'
+    getAclMap: async () => ({ 'legacy-page': { protected: true, allow: ['a@x.com'] }, 'new-page': null }),
+    getCategoryMap: async () => ({ 'legacy-page': 'Reports', 'new-page': 'Reports' })
   });
 
   assert.deepEqual(pages, [
