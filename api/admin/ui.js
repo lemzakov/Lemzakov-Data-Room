@@ -77,6 +77,8 @@ const PAGE = `<!doctype html>
     .store-badge.blob { background: #ecfdf5; color: #065f46; }
     .store-badge.redis { background: #fef3c7; color: #92400e; }
     .store-badge.both { background: #eff6ff; color: #1e40af; }
+    button.ghost.danger { color: #b91c1c; border-color: #fecaca; }
+    button.ghost.danger:hover { background: #fef2f2; }
   </style>
 </head>
 <body>
@@ -389,6 +391,7 @@ const PAGE = `<!doctype html>
         '<td><div class="row">' + access +
           ' <button class="ghost" data-act="stats" data-slug="' + slug + '">Stats</button>' +
           ' <button class="ghost" data-act="category" data-slug="' + slug + '" data-cat="' + escapeHtml(catOf(p)) + '">Category</button>' +
+          ' <button class="ghost danger" data-act="delete" data-slug="' + slug + '">Delete</button>' +
         '</div></td>' +
       '</tr>';
     }
@@ -459,6 +462,36 @@ const PAGE = `<!doctype html>
 
       if (act === 'stats') {
         openStats(slug);
+      }
+
+      // Irreversible and frees storage, so it asks twice: once for the page,
+      // once with the slug typed back to guard against a mis-click on the
+      // wrong row.
+      if (act === 'delete') {
+        if (!confirm('Permanently delete "' + slug + '"?\n\nThis removes the page HTML, its access record, its category and all of its analytics. It cannot be undone.')) return;
+        const typed = prompt('Type the page name to confirm deletion:', '');
+        if (typed === null) return;
+        if (typed.trim() !== slug) {
+          showMsg($('dashMsg'), 'Name did not match — nothing was deleted.', 'err');
+          return;
+        }
+        (async () => {
+          try {
+            const r = await fetch('/api/admin/page?slug=' + encodeURIComponent(slug), {
+              method: 'DELETE',
+              headers: authHeaders()
+            });
+            const data = await r.json();
+            if (!r.ok || !data.ok) throw new Error(data.error || 'Delete failed');
+            showMsg($('dashMsg'),
+              'Deleted ' + slug + ' — ' + data.redisKeysDeleted + ' Redis keys removed (' +
+              data.analyticsEventsDeleted + ' analytics records).', 'ok');
+            await loadPages();
+            await loadStatsOverview();
+          } catch (err) {
+            showMsg($('dashMsg'), err.message, 'err');
+          }
+        })();
       }
     });
 

@@ -34,9 +34,16 @@ invisible to visitors.
 
 | | Store | What is in it |
 |---|---|---|
-| **New writes** | Vercel Blob (private) | Every page and project file written since the cutover |
-| **Back catalogue** | Redis | Pages and project files published before the cutover — deliberately **not** migrated |
-| **Always Redis** | Redis | ACLs, sessions, project config, page categories, analytics |
+| **New writes** | Vercel Blob (private) | Every page and project file written since the cutover, plus **all access records** |
+| **Back catalogue** | Redis | Pages, project files and ACLs written before the cutover — deliberately **not** migrated |
+| **Always Redis** | Redis | Sessions, project config, page categories, analytics |
+
+Access records are in Blob for an availability reason rather than a size one:
+Redis refuses every write once it reaches `maxmemory`, which would otherwise
+make it impossible to restrict a page exactly when the store is under pressure.
+Writing an ACL to Blob also drops any pre-cutover Redis copy, and making a page
+public clears the record from **both** stores — leaving one behind would let the
+fallback read keep serving a page as protected after it was opened up.
 
 Reads query both stores concurrently and prefer Blob, so a pre-cutover page
 serves from Redis exactly as it always did, and nothing had to be moved. Writes
@@ -523,3 +530,32 @@ does not match, so a failed upload cannot cost content. Both need
 
 Raising `maxmemory` on the Redis plan is the other lever — instant relief, no
 code, but the growth resumes unless new writes are going to Blob.
+
+### Deleting pages from /admin
+
+Each row in `/admin` has a **Delete** button. It removes the page HTML, its
+access record, its category and its entire analytics footprint — the counters
+plus up to 1000 per-open detail records, which are usually the larger share.
+Both stores are cleared. It asks for confirmation twice, the second time
+requiring the slug typed back, because nothing about it is reversible.
+
+This works while Redis is full: the whole operation is `DEL` and `SREM`, neither
+of which is a `denyoom` command. Deleting a few heavy, obsolete pages is the
+quickest way to get writes accepted again without a terminal.
+
+`DELETE /api/admin/page?slug=<slug>` is the same operation for scripting.
+
+### What still needs Redis
+
+Freeing memory remains necessary — these paths write to Redis and stay broken
+until it has headroom:
+
+- **Sessions** (`createSession`, `oauthstate:*`) — new Google sign-ins fail, so
+  restricted pages are unreachable to anyone without an existing cookie. This is
+  the one that matters most.
+- **Access requests** (`accessreq:*`) — the "Request access" button.
+- **Page categories** (`pagemeta:*`).
+- **Analytics** — silently skipped; never breaks page delivery.
+
+Admin access itself is unaffected: `/admin` authenticates with `ADMIN_TOKEN`,
+not Google, so the Delete button is reachable during an outage.
