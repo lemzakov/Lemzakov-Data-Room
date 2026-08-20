@@ -154,3 +154,60 @@ test('pageExists sees slugs in either store', async () => {
   assert.equal(await pageExists('new', deps), true);
   assert.equal(await pageExists('ghost', deps), false);
 });
+
+// --- Bulk ACL lookup (the /admin timeout fix) -------------------------------
+
+const { getAclMap } = require('../lib/access');
+
+function countingBlob(seed = {}) {
+  const acls = new Map(Object.entries(seed.acls || {}));
+  return {
+    reads: [],
+    lists: 0,
+    blobEnabled: () => seed.enabled !== false,
+    async listAclSlugs() { this.lists += 1; return [...acls.keys()]; },
+    async readAcl(slug) { this.reads.push(slug); return acls.has(slug) ? acls.get(slug) : null; }
+  };
+}
+
+test('getAclMap does ONE Blob listing and reads only slugs that have a Blob record', async () => {
+  const blob = countingBlob({ acls: { 'in-blob': { protected: true, allow: ['a@x.com'] } } });
+  const redisReads = [];
+
+  const map = await getAclMap(['in-blob', 'legacy-1', 'legacy-2', 'legacy-3'], {
+    blob,
+    kvGetJson: async (k) => {
+      redisReads.push(k);
+      return k === 'acl:legacy-1' ? { protected: true, allow: ['old@x.com'] } : null;
+    }
+  });
+
+  assert.equal(blob.lists, 1, 'exactly one Blob listing');
+  assert.deepEqual(blob.reads, ['in-blob'], 'no Blob GET for slugs with no Blob record');
+  assert.equal(redisReads.length, 3, 'legacy slugs fall through to Redis');
+
+  assert.deepEqual(map['in-blob'].allow, ['a@x.com']);
+  assert.deepEqual(map['legacy-1'].allow, ['old@x.com']);
+  assert.equal(map['legacy-2'], null);
+});
+
+test('getAclMap still returns records when the Blob listing fails', async () => {
+  const blob = {
+    blobEnabled: () => true,
+    async listAclSlugs() { throw new Error('blob unavailable'); },
+    async readAcl() { throw new Error('should not be reached'); }
+  };
+  const map = await getAclMap(['memo'], {
+    blob,
+    kvGetJson: async () => ({ protected: true, allow: ['a@x.com'] })
+  });
+  assert.deepEqual(map.memo.allow, ['a@x.com'], 'degrades to Redis rather than failing the listing');
+});
+
+test('getAclMap skips Blob entirely when it is not configured', async () => {
+  const blob = countingBlob({ enabled: false });
+  const map = await getAclMap(['memo'], { blob, kvGetJson: async () => null });
+  assert.equal(blob.lists, 0);
+  assert.deepEqual(blob.reads, []);
+  assert.equal(map.memo, null);
+});

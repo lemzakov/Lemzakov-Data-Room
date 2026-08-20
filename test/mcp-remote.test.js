@@ -31,10 +31,13 @@ test('initialize falls back to the default protocol for unknown versions', async
   assert.equal(res.result.protocolVersion, core.DEFAULT_PROTOCOL_VERSION);
 });
 
-test('tools/list exposes the four publish tools with html required', async () => {
+test('tools/list exposes the publish and maintenance tools with html required', async () => {
   const res = await core.handleMcpMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = res.result.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ['get_page', 'list_pages', 'publish_page', 'set_page_access']);
+  assert.deepEqual(names, [
+    'delete_page', 'get_page', 'list_pages', 'publish_page',
+    'purge_analytics', 'set_page_access', 'storage_report'
+  ]);
   const publish = res.result.tools.find((t) => t.name === 'publish_page');
   assert.deepEqual(publish.inputSchema.required.sort(), ['html', 'slug']);
 });
@@ -101,18 +104,22 @@ test('set_page_access rejects a bogus access value', async () => {
   assert.match(res.content[0].text, /public.*restricted/);
 });
 
-test('list_pages aggregates slugs with their ACL state and category', async () => {
+// list_pages now delegates to lib/pages.js so it cannot drift from /admin, and
+// so it shares the bulk lookups rather than one Blob round trip per page.
+test('list_pages aggregates slugs with their ACL state, category and store', async () => {
   const deps = {
     getRuntimeConfig: () => ({ storagePrefix: 'html' }),
-    listSlugs: async () => ['a', 'b'],
-    getAcl: async (slug) => (slug === 'a' ? { protected: true, allow: ['x@y.com'] } : null),
-    getCategory: async (slug) => (slug === 'a' ? 'Investors' : '')
+    listSlugsByStore: async () => ({
+      blob: new Set(['a']), redis: new Set(['b']), all: ['a', 'b']
+    }),
+    getAclMap: async () => ({ a: { protected: true, allow: ['x@y.com'] }, b: null }),
+    getCategoryMap: async () => ({ a: 'Investors', b: '' })
   };
   const res = await core.callTool('list_pages', {}, deps);
   const parsed = JSON.parse(res.content[0].text);
   assert.deepEqual(parsed.pages, [
-    { slug: 'a', protected: true, allow: ['x@y.com'], category: 'Investors' },
-    { slug: 'b', protected: false, allow: [], category: '' }
+    { slug: 'a', protected: true, allow: ['x@y.com'], category: 'Investors', store: 'blob' },
+    { slug: 'b', protected: false, allow: [], category: '', store: 'redis' }
   ]);
 });
 
