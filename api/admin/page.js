@@ -17,7 +17,7 @@
 
 const { getRuntimeConfig, pageUrls } = require('../../lib/config');
 const { saveHtml } = require('../../lib/storage');
-const { getAcl, setAcl, normalizeSlug } = require('../../lib/access');
+const { getAcl, setAcl, resolveAccessForPublish, normalizeSlug } = require('../../lib/access');
 const { getCategory, setPageCategory } = require('../../lib/page-meta');
 const { deletePage, pageExists } = require('../../lib/page-delete');
 const { isAdminAuthorized } = require('../../lib/admin');
@@ -103,10 +103,14 @@ module.exports = async function handler(req, res) {
     const hasAccessFields = body.protected !== undefined || body.allow !== undefined;
     let record;
     if (published || hasAccessFields) {
-      const allow = Array.isArray(body.allow) ? body.allow : [];
-      const isProtected =
-        body.protected === undefined ? allow.length > 0 : Boolean(body.protected);
-      record = await setAcl(slug, { protected: isProtected, allow });
+      // Publishing alone must not change who can see the page — with no access
+      // fields the current record is preserved rather than reset to public.
+      const wanted = await resolveAccessForPublish(slug, {
+        isProtected: body.protected === undefined ? undefined : Boolean(body.protected),
+        allow: Array.isArray(body.allow) ? body.allow : [],
+        allowProvided: body.allow !== undefined
+      });
+      record = await setAcl(slug, wanted);
     } else {
       const acl = await getAcl(slug);
       record = { protected: Boolean(acl && acl.protected), allow: (acl && acl.allow) || [] };
