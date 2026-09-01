@@ -15,7 +15,7 @@
 //   LDR_ADMIN_TOKEN — ADMIN_TOKEN (or SYNC_SECRET) configured in Vercel
 //
 // Tools exposed:
-//   publish_page      — publish/replace a page's HTML and/or set its access
+//   publish_page      — publish/replace a page's HTML (with its images) and/or set its access
 //   set_page_access   — set a page public or restricted (+ allow list)
 //   get_page          — read a page's current access record
 //   list_pages        — list every stored page and its access state
@@ -121,6 +121,23 @@ function resolveImage(args, deps) {
   throw new Error('Provide the image as `data` (base64 or a data: URI) or as a local path in `file`.');
 }
 
+// Resolves the `images` argument of publish_page into what the admin API takes:
+// [{ name, data, contentType? }]. Each entry may carry inline `data` or a local
+// `file` path, the same two shapes upload_image accepts.
+function resolveImages(images, deps) {
+  const list = Array.isArray(images) ? images : [];
+  return list.map((image) => {
+    if (!image || typeof image !== 'object') {
+      throw new Error('Each entry in `images` must be an object with a name and data (or a file path).');
+    }
+    const { data, name } = resolveImage(image, deps);
+    if (!name) throw new Error('Each entry in `images` needs a `name` when passed inline.');
+    const out = { name: String(name).split(/[\\/]/).pop(), data };
+    if (typeof image.contentType === 'string' && image.contentType) out.contentType = image.contentType;
+    return out;
+  });
+}
+
 function normalizeAccess(args) {
   const allow = Array.isArray(args.allow)
     ? args.allow.map((s) => String(s).trim()).filter(Boolean)
@@ -163,6 +180,24 @@ const TOOLS = [
         category: {
           type: 'string',
           description: 'Optional category label used to organize pages in /admin and the Telegram bot.'
+        },
+        images: {
+          type: 'array',
+          description:
+            'Images the page uses, published together with it. Each is stored and ' +
+            'the HTML\'s own relative references to it are repointed at the stored ' +
+            'path, so you can write <img src="chart.png"> and pass the image ' +
+            'without knowing the final URL. Give each entry inline `data` or a ' +
+            'local `file` path.',
+          items: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: 'File name, e.g. "chart.png". Defaults to the `file` name.' },
+              data: { type: 'string', description: 'The image bytes as base64, or a base64 data: URI.' },
+              file: { type: 'string', description: 'Local path to an image file.' },
+              contentType: { type: 'string', description: 'Optional, e.g. "image/png".' }
+            }
+          }
         }
       },
       required: ['slug']
@@ -256,6 +291,8 @@ const TOOL_IMPLS = {
       body.allow = allow;
     }
     if (typeof args.category === 'string') body.category = args.category;
+    const images = resolveImages(args.images, deps);
+    if (images.length) body.images = images;
     return apiPost('/api/admin/page', body, deps);
   },
 
@@ -414,5 +451,6 @@ module.exports = {
   resolveConfig,
   normalizeAccess,
   resolveImage,
+  resolveImages,
   startStdioServer
 };

@@ -43,6 +43,52 @@ test('tools/list exposes the publish, image and maintenance tools with html requ
   assert.deepEqual(publish.inputSchema.required.sort(), ['html', 'slug']);
 });
 
+test('publish_page stores the page images and rewrites the HTML to point at them', async () => {
+  const saved = [];
+  const res = await core.callTool('publish_page', {
+    slug: 'memo',
+    html: '<img src="Q3 Chart.PNG">',
+    images: [{ name: 'Q3 Chart.PNG', data: 'aGk=' }]
+  }, {
+    getRuntimeConfig: () => ({ storagePrefix: 'html' }),
+    saveHtml: async (prefix, slug, html) => saved.push({ slug, html }),
+    getCategory: async () => '',
+    resolveAccessForPublish: async () => ({ protected: false, allow: [] }),
+    setAcl: async (slug, rec) => rec,
+    notifyPagePublished: async () => {},
+    pageUrls: () => [],
+    assets: {
+      attachImages: async () => [{
+        original: 'Q3 Chart.PNG', name: 'q3-chart.png', path: '/memo/q3-chart.png',
+        urls: [], size: 2, contentType: 'image/png'
+      }],
+      linkImagesInHtml: (html) => ({ html: html.replace('Q3 Chart.PNG', '/memo/q3-chart.png'), rewritten: 1 })
+    }
+  });
+
+  // The stored document points at the stored image, not at the name the caller
+  // happened to use.
+  assert.equal(saved[0].html, '<img src="/memo/q3-chart.png">');
+  const out = JSON.parse(res.content[0].text);
+  assert.equal(out.imagesLinked, 1);
+  assert.deepEqual(out.images.map((i) => i.path), ['/memo/q3-chart.png']);
+});
+
+test('publish_page does not store the page when one of its images fails', async () => {
+  let saves = 0;
+  const res = await core.callTool('publish_page', {
+    slug: 'memo', html: '<img src="c.png">', images: [{ name: 'c.png', data: 'aGk=' }]
+  }, {
+    getRuntimeConfig: () => ({ storagePrefix: 'html' }),
+    saveHtml: async () => { saves += 1; },
+    assets: { attachImages: async () => { throw new Error('Image is 9 MB; the limit is 4 MB.'); } }
+  });
+
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /the limit is 4 MB/);
+  assert.equal(saves, 0, 'a page must never go live pointing at an image that failed');
+});
+
 test('upload_image stores the image and hands back the path to reference it by', async () => {
   const uploads = [];
   const res = await core.callTool('upload_image', {
