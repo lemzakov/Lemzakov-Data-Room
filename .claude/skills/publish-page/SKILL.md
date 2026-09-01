@@ -43,7 +43,7 @@ Drive**. Both push HTML straight into the site and set per-page access.
 1. **MCP server (recommended, no Drive):** the bundled `data-room` MCP server
    (`mcp/data-room-mcp.js`, registered in `.mcp.json`) exposes tools you can
    call directly:
-   - `publish_page` — publish/replace a page's HTML and set access in one call
+   - `publish_page` — publish/replace a page's HTML, its images and its access in one call
    - `set_page_access` — flip a page public/restricted and edit its allow list
    - `get_page` — read a page's current access
    - `list_pages` — list every stored page and its access state
@@ -105,10 +105,39 @@ page's own access: restrict the page and its images are restricted in the same
 instant; make it public and they are public. Re-uploading the same name replaces
 the image without republishing the page.
 
-**Order matters:** upload the images FIRST, then write the HTML with the paths
-you got back, then publish the page.
+### One call: publish the page with its images
 
-Via the MCP server:
+Write the HTML against the plain file names and hand the images to
+`publish_page`. Each is stored first, then the document's relative references are
+repointed at wherever it landed — so you never need to know the final path:
+
+```jsonc
+publish_page {
+  "slug": "investor-deck",
+  "html": "<img src=\"chart.png\" alt=\"…\">",
+  "images": [{ "name": "chart.png", "data": "<base64 or a data: URI>" }]
+}
+// stored HTML:  <img src="/investor-deck/chart.png" alt="…">
+```
+
+The stdio server takes a local path per image instead —
+`"images": [{ "file": "./chart.png" }]` — which avoids base64-ing the bytes
+through the conversation. Same thing from the CLI:
+
+```bash
+node scripts/publish.js --slug investor-deck --html-file ./deck.html --image ./chart.png
+```
+
+Only *relative* references are rewritten. An absolute URL, a path that already
+starts with `/`, a `data:` URI and ordinary prose are left alone, so republishing
+the same document is safe. If an image fails, the page is not published at all —
+it never goes live pointing at something that never arrived.
+
+### Two calls: when the request would be too big
+
+Everything travels in one HTTP request, which the platform caps at ~4.5 MB. For
+more or larger images, upload them separately and publish HTML that already
+carries the returned paths:
 
 ```jsonc
 // 1. upload  ->  { "path": "/investor-deck/chart.png", "urls": [...] }
@@ -116,10 +145,6 @@ upload_image { "slug": "investor-deck", "name": "chart.png", "data": "<base64>" 
 // 2. reference it in the HTML:  <img src="/investor-deck/chart.png" alt="…">
 // 3. publish_page { "slug": "investor-deck", "html": "<!doctype …>" }
 ```
-
-The stdio server also takes a local path — `upload_image { "slug":
-"investor-deck", "file": "./chart.png" }` — which avoids base64-ing the bytes
-through the conversation.
 
 Via the CLI helper (`scripts/upload-image.js`):
 
@@ -135,8 +160,9 @@ Rules worth knowing before you upload:
 - **Formats:** png, jpg/jpeg, gif, webp, avif, svg, ico, bmp. Nothing else.
 - **Size:** 4 MB per image. Resize before uploading rather than after a failure.
 - **Names** are lower-cased and cleaned (`Q3 Chart.PNG` → `q3-chart.png`), and
-  live in one flat namespace per page — use the name the upload returns, not the
-  one you sent.
+  live in one flat namespace per page. Publishing with `images` handles that for
+  you; uploading separately means using the `path` the tool returns, not the name
+  you sent.
 - **Storage:** images require `BLOB_READ_WRITE_TOKEN` (Vercel Blob) on the
   server; they are never stored in Redis.
 - Deleting a page deletes its images too.

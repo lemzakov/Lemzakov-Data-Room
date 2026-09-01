@@ -179,6 +179,63 @@ test('deleteImage removes one image; deleteAllImages clears the page', async () 
   assert.equal(blob.store.size, 0);
 });
 
+// --- Publishing a page together with its images -----------------------------
+
+test('attachImages uploads every image and remembers the name the caller used', async () => {
+  const blob = fakeBlob();
+  const uploads = await assets.attachImages('Memo', [
+    { name: 'Q3 Chart.PNG', data: PNG.toString('base64') },
+    { name: 'logo', data: PNG.toString('base64'), contentType: 'image/webp' }
+  ], { blob });
+
+  assert.deepEqual(uploads.map((u) => u.original), ['Q3 Chart.PNG', 'logo']);
+  assert.deepEqual(uploads.map((u) => u.path), ['/memo/q3-chart.png', '/memo/logo.webp']);
+  assert.equal(blob.store.size, 2);
+});
+
+test('attachImages is a no-op without images and rejects a malformed entry', async () => {
+  const blob = fakeBlob();
+  assert.deepEqual(await assets.attachImages('memo', undefined, { blob }), []);
+  await assert.rejects(
+    () => assets.attachImages('memo', ['chart.png'], { blob }),
+    /must be an object/
+  );
+});
+
+test('linkImagesInHtml repoints relative references at the stored path', () => {
+  const uploads = [{ original: 'Q3 Chart.PNG', name: 'q3-chart.png', path: '/memo/q3-chart.png' }];
+  const { html, rewritten } = assets.linkImagesInHtml(
+    '<img src="Q3 Chart.PNG"><img src="./images/q3-chart.png">' +
+    '<div style="background:url(q3-chart.png)"></div>',
+    uploads
+  );
+
+  assert.equal(rewritten, 3);
+  assert.equal(html.match(/\/memo\/q3-chart\.png/g).length, 3);
+});
+
+test('linkImagesInHtml leaves alone anything that already addresses something else', () => {
+  const uploads = [{ original: 'chart.png', name: 'chart.png', path: '/memo/chart.png' }];
+  const source = '<img src="/memo/chart.png">' +          // already correct
+    '<img src="https://elsewhere.example/chart.png">' +    // another site
+    '<img src="data:image/png;base64,AAAA">' +             // inline data
+    '<p>chart.png is the file name</p>';                   // prose, not a reference
+  const { html, rewritten } = assets.linkImagesInHtml(source, uploads);
+
+  assert.equal(rewritten, 0);
+  assert.equal(html, source);
+});
+
+test('linkImagesInHtml is idempotent, so republishing the same document is safe', () => {
+  const uploads = [{ original: 'chart.png', name: 'chart.png', path: '/memo/chart.png' }];
+  const once = assets.linkImagesInHtml('<img src="chart.png">', uploads);
+  const twice = assets.linkImagesInHtml(once.html, uploads);
+
+  assert.equal(once.rewritten, 1);
+  assert.equal(twice.rewritten, 0);
+  assert.equal(twice.html, once.html);
+});
+
 // --- Serving ----------------------------------------------------------------
 
 test('isAssetName accepts only the shape an upload produces', () => {

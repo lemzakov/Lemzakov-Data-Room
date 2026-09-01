@@ -220,12 +220,41 @@ sync. A public page's images are cacheable for five minutes; a restricted page's
 are `private, no-store` and, like the page, bounce an unapproved visitor into
 Google sign-in.
 
+**A page and its images publish in one call.** Pass `images` to `publish_page`
+(or to `POST /api/admin/page`) and write the HTML against the plain file names —
+each image is stored first, then the document's own *relative* references are
+repointed at the path it landed on:
+
+```jsonc
+publish_page {
+  "slug": "q3-memo",
+  "html": "<img src=\"Q3 Chart.PNG\">",
+  "images": [{ "name": "Q3 Chart.PNG", "data": "<base64>" }]
+}
+// stored HTML:  <img src="/q3-memo/q3-chart.png">
+```
+
+So the caller never has to predict the final path. Only relative references are
+touched — an absolute URL, a site-absolute path, a `data:` URI and ordinary prose
+are all left exactly as written, which also makes the rewrite idempotent:
+republishing the same document changes nothing the second time. If any image
+fails, the page is not stored at all, so a live page never points at an image
+that never arrived.
+
+The whole request still has to fit under the platform's ~4.5 MB body cap. For a
+page with more or larger images, upload them separately and publish the HTML
+with the returned paths already in it:
+
 - **In `/admin`**: each page row has an **Images** button — upload (multiple at
   once), preview, copy the ready-made `<img>` tag, or delete.
 - **Over MCP**: `upload_image` → put the returned `path` in the HTML →
   `publish_page`. `list_images` and `delete_image` manage what is already there.
-- **From a script** (`.claude/skills/publish-page/scripts/upload-image.js`):
+- **From a script**:
   ```bash
+  # page + its images in one call
+  node publish.js --slug investor-deck --html-file ./deck.html --image ./chart.png
+
+  # or manage images on their own
   node upload-image.js --slug investor-deck --file ./chart.png
   node upload-image.js --slug investor-deck --list
   node upload-image.js --slug investor-deck --delete chart.png
@@ -337,7 +366,7 @@ Tools:
 
 | Tool | What it does |
 |---|---|
-| `publish_page` | Publish/replace a page's HTML (inline `html` or local `htmlFile`) and set access (`public`/`restricted` + `allow`) in one call |
+| `publish_page` | Publish/replace a page's HTML (inline `html` or local `htmlFile`), its `images` (inline `data` or local `file`), and its access (`public`/`restricted` + `allow`) — all in one call |
 | `set_page_access` | Flip a page public/restricted and edit its allow list (no HTML change) |
 | `get_page` | Read a page's current access record |
 | `list_pages` | List every stored page and its access state |

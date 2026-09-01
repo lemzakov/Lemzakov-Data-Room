@@ -56,6 +56,29 @@ test('tools/list returns the publish and image tools', async () => {
   assert.equal(TOOLS.length, 7);
 });
 
+test('publish_page forwards the page images to the admin API alongside the HTML', async () => {
+  const { fetch, calls } = mockFetch(() => ({ json: { ok: true, slug: 'deck', published: true } }));
+  await callTool('publish_page', {
+    slug: 'deck',
+    html: '<img src="chart.png">',
+    images: [{ name: 'chart.png', data: 'aGk=' }, { file: '/tmp/logo.PNG' }]
+  }, { fetch, env: ENV, readBinaryFile: () => Buffer.from('hi') });
+
+  assert.equal(calls[0].url, 'https://data-room.example.com/api/admin/page');
+  assert.deepEqual(calls[0].body.images, [
+    { name: 'chart.png', data: 'aGk=' },
+    { name: 'logo.PNG', data: Buffer.from('hi').toString('base64') }
+  ]);
+});
+
+test('publish_page rejects an images entry with neither data nor a file', async () => {
+  const res = await callTool('publish_page', {
+    slug: 'deck', html: '<p>hi</p>', images: [{ name: 'chart.png' }]
+  }, { env: ENV });
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /`data`.*or.*`file`/);
+});
+
 test('upload_image posts the bytes to /api/admin/asset with the admin token', async () => {
   const { fetch, calls } = mockFetch(() => ({
     json: { ok: true, slug: 'deck', name: 'chart.png', path: '/deck/chart.png' }

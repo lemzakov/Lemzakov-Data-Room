@@ -8,9 +8,17 @@
 //   {
 //     "slug": "investor-deck",          (required)
 //     "html": "<!doctype html>...",     (optional: also publish/replace content)
+//     "images": [                        (optional: publish the page WITH its images)
+//       { "name": "chart.png", "data": "<base64 | data: URI>" }
+//     ],
 //     "protected": true,                 (optional, default true when allow set)
 //     "allow": ["a@x.com", "b@y.com"]   (emails permitted to view)
 //   }
+//
+// Images are stored first, then the HTML's own relative references to them are
+// repointed at the paths they landed on — so a document written against
+// `<img src="chart.png">` publishes correctly in ONE call, with no need to know
+// the final path in advance.
 //
 // Setting "protected": false (or allow: []) makes the page public again.
 // Auth: ADMIN_TOKEN (or SYNC_SECRET) via X-Admin-Token header or ?token=.
@@ -19,6 +27,7 @@ const { getRuntimeConfig, pageUrls } = require('../../lib/config');
 const { saveHtml } = require('../../lib/storage');
 const { getAcl, setAcl, resolveAccessForPublish, normalizeSlug } = require('../../lib/access');
 const { getCategory, setPageCategory } = require('../../lib/page-meta');
+const { attachImages, linkImagesInHtml } = require('../../lib/page-assets');
 const { deletePage, pageExists } = require('../../lib/page-delete');
 const { isAdminAuthorized } = require('../../lib/admin');
 const { readJsonBody, sendJson } = require('../../lib/http');
@@ -79,11 +88,27 @@ module.exports = async function handler(req, res) {
     return sendJson(res, 400, { ok: false, error: 'A slug is required' });
   }
 
+  // Images go in before the HTML: if one fails, the page is not left live
+  // pointing at an image that never arrived. A rejected image is almost always
+  // the caller's (wrong format, too large, no data), so it answers 400 with the
+  // reason rather than a bare 500.
+  let uploads;
   try {
+    uploads = await attachImages(slug, body.images);
+  } catch (error) {
+    console.error('[admin/page] image upload failed', { slug, message: error.message });
+    return sendJson(res, 400, { ok: false, error: error.message });
+  }
+
+  try {
+
     let published = false;
+    let imagesLinked = 0;
     if (typeof body.html === 'string' && body.html.length) {
+      const linked = linkImagesInHtml(body.html, uploads);
+      imagesLinked = linked.rewritten;
       const { storagePrefix } = getRuntimeConfig();
-      await saveHtml(storagePrefix, slug, body.html);
+      await saveHtml(storagePrefix, slug, linked.html);
       published = true;
     }
 
@@ -134,6 +159,10 @@ module.exports = async function handler(req, res) {
       protected: record.protected,
       allow: record.allow,
       category,
+      images: uploads.map(({ name, path, urls, size, contentType }) => ({
+        name, path, urls, size, contentType
+      })),
+      imagesLinked,
       note: record.protected
         ? 'Restricted: visitors sign in with Google; approved emails get in, others can Request access (approved by you in Telegram). Sessions last ~6 months.'
         : 'Page is public.'
