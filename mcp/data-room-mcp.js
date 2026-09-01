@@ -19,6 +19,9 @@
 //   set_page_access   — set a page public or restricted (+ allow list)
 //   get_page          — read a page's current access record
 //   list_pages        — list every stored page and its access state
+//   upload_image      — attach an image to a page and get its URL back
+//   list_images       — list the images attached to a page
+//   delete_image      — remove one image from a page
 //
 // Run directly for stdio:  node mcp/data-room-mcp.js
 // The handler/tool logic is exported for unit testing.
@@ -79,6 +82,20 @@ async function apiGet(path, deps) {
   return data;
 }
 
+async function apiDelete(path, deps) {
+  const fetchImpl = deps.fetch || globalThis.fetch;
+  const { baseUrl, token } = requireConfig(deps.env);
+  const res = await fetchImpl(`${baseUrl}${path}`, {
+    method: 'DELETE',
+    headers: { 'X-Admin-Token': token }
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.ok === false) {
+    throw new Error(data.error || `Request to ${path} failed (HTTP ${res.status}).`);
+  }
+  return data;
+}
+
 // Resolves the HTML payload from either inline `html` or a local `htmlFile`.
 function resolveHtml(args, deps) {
   if (typeof args.html === 'string' && args.html.length) return args.html;
@@ -87,6 +104,21 @@ function resolveHtml(args, deps) {
     return readFile(args.htmlFile);
   }
   return undefined;
+}
+
+// Resolves the image bytes from either inline `data` (base64 / data: URI) or a
+// local `file` path. Unlike the remote server this one runs on the caller's
+// machine, so it can read the file itself and skip the base64 round trip
+// through the model.
+function resolveImage(args, deps) {
+  if (typeof args.file === 'string' && args.file.length) {
+    const readBinary = deps.readBinaryFile || ((p) => fs.readFileSync(p));
+    return { data: Buffer.from(readBinary(args.file)).toString('base64'), name: args.name || args.file };
+  }
+  if (typeof args.data === 'string' && args.data.length) {
+    return { data: args.data, name: args.name };
+  }
+  throw new Error('Provide the image as `data` (base64 or a data: URI) or as a local path in `file`.');
 }
 
 function normalizeAccess(args) {
@@ -164,6 +196,51 @@ const TOOLS = [
     name: 'list_pages',
     description: 'List every stored page and its access state.',
     inputSchema: { type: 'object', properties: {} }
+  },
+  {
+    name: 'upload_image',
+    description:
+      'Attach an image to a page and get back the path to reference it by. Use ' +
+      'this instead of embedding a data: URI: upload each image first, put the ' +
+      'returned path in the HTML (<img src="/<slug>/<name>">), then call ' +
+      'publish_page. The image is served under the page\'s own access, and ' +
+      're-uploading the same name replaces it without republishing the page. ' +
+      'Provide the bytes inline via `data` or a local path via `file`.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slug: { type: 'string', description: 'The page the image belongs to.' },
+        name: {
+          type: 'string',
+          description: 'File name for the image, e.g. "chart.png". Defaults to the `file` name.'
+        },
+        data: { type: 'string', description: 'The image bytes as base64, or a full base64 data: URI.' },
+        file: { type: 'string', description: 'Local path to an image file to upload.' },
+        contentType: {
+          type: 'string',
+          description: 'Optional, e.g. "image/png". Only used when the name has no extension.'
+        }
+      },
+      required: ['slug']
+    }
+  },
+  {
+    name: 'list_images',
+    description: 'List the images attached to a page, with the path and URLs to reference each by.',
+    inputSchema: {
+      type: 'object',
+      properties: { slug: { type: 'string' } },
+      required: ['slug']
+    }
+  },
+  {
+    name: 'delete_image',
+    description: 'Permanently remove one image from a page. The page HTML is not changed.',
+    inputSchema: {
+      type: 'object',
+      properties: { slug: { type: 'string' }, name: { type: 'string' } },
+      required: ['slug', 'name']
+    }
   }
 ];
 
@@ -198,6 +275,28 @@ const TOOL_IMPLS = {
 
   async list_pages(_args, deps) {
     return apiGet('/api/admin/pages', deps);
+  },
+
+  async upload_image(args, deps) {
+    if (!args.slug) throw new Error('slug is required.');
+    const { data, name } = resolveImage(args, deps);
+    if (!name) throw new Error('name is required when the image is passed inline.');
+    const body = { slug: args.slug, name, data };
+    if (typeof args.contentType === 'string' && args.contentType) body.contentType = args.contentType;
+    return apiPost('/api/admin/asset', body, deps);
+  },
+
+  async list_images(args, deps) {
+    if (!args.slug) throw new Error('slug is required.');
+    return apiGet(`/api/admin/asset?slug=${encodeURIComponent(args.slug)}`, deps);
+  },
+
+  async delete_image(args, deps) {
+    if (!args.slug || !args.name) throw new Error('slug and name are required.');
+    return apiDelete(
+      `/api/admin/asset?slug=${encodeURIComponent(args.slug)}&name=${encodeURIComponent(args.name)}`,
+      deps
+    );
   }
 };
 
@@ -314,5 +413,6 @@ module.exports = {
   handleMessage,
   resolveConfig,
   normalizeAccess,
+  resolveImage,
   startStdioServer
 };

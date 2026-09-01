@@ -6,16 +6,24 @@ const { getAcl, setAcl } = require('../lib/access');
 
 function fakeBlob(seed = {}) {
   const acls = new Map(Object.entries(seed.acls || {}));
+  // slug -> [name, ...] of the images attached to that page
+  const assets = new Map(Object.entries(seed.assets || {}));
   return {
     acls,
+    assets,
     deletedHtml: [],
     deletedAcl: [],
+    deletedAssets: [],
     enabled: seed.enabled !== false,
     blobEnabled() { return this.enabled; },
     async saveAcl(slug, record) { acls.set(slug, record); },
     async readAcl(slug) { return acls.has(slug) ? acls.get(slug) : null; },
     async deleteAcl(slug) { this.deletedAcl.push(slug); return acls.delete(slug); },
-    async deleteHtml(prefix, slug) { this.deletedHtml.push(`${prefix}/${slug}`); return true; }
+    async deleteHtml(prefix, slug) { this.deletedHtml.push(`${prefix}/${slug}`); return true; },
+    async listAssets(slug) {
+      return (assets.get(slug) || []).map((name) => ({ name, size: 1, uploadedAt: '' }));
+    },
+    async deleteAsset(slug, name) { this.deletedAssets.push(`${slug}/${name}`); return true; }
   };
 }
 
@@ -103,7 +111,7 @@ test('analyticsKeys covers every fixed stat key documented in analytics.js', () 
 });
 
 test('deletePage clears content, access, category and analytics from both stores', async () => {
-  const blob = fakeBlob();
+  const blob = fakeBlob({ assets: { memo: ['chart.png', 'logo.svg'] } });
   const deleted = [];
   const sremmed = [];
 
@@ -127,6 +135,9 @@ test('deletePage clears content, access, category and analytics from both stores
   assert.deepEqual(blob.deletedHtml, ['html/memo']);
   assert.deepEqual(blob.deletedAcl, ['memo']);
   assert.equal(result.analyticsEventsDeleted, 2);
+  // Images are served under the page's ACL, so they cannot outlive the page.
+  assert.deepEqual(blob.deletedAssets.sort(), ['memo/chart.png', 'memo/logo.svg']);
+  assert.equal(result.imagesDeleted, 2);
 });
 
 test('deletePage normalizes the slug and rejects an empty one', async () => {

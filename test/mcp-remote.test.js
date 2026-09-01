@@ -31,15 +31,62 @@ test('initialize falls back to the default protocol for unknown versions', async
   assert.equal(res.result.protocolVersion, core.DEFAULT_PROTOCOL_VERSION);
 });
 
-test('tools/list exposes the publish and maintenance tools with html required', async () => {
+test('tools/list exposes the publish, image and maintenance tools with html required', async () => {
   const res = await core.handleMcpMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = res.result.tools.map((t) => t.name).sort();
   assert.deepEqual(names, [
-    'delete_page', 'get_page', 'list_pages', 'publish_page',
-    'purge_analytics', 'set_page_access', 'storage_report'
+    'delete_image', 'delete_page', 'get_page', 'list_images', 'list_pages',
+    'publish_page', 'purge_analytics', 'set_page_access', 'storage_report',
+    'upload_image'
   ]);
   const publish = res.result.tools.find((t) => t.name === 'publish_page');
   assert.deepEqual(publish.inputSchema.required.sort(), ['html', 'slug']);
+});
+
+test('upload_image stores the image and hands back the path to reference it by', async () => {
+  const uploads = [];
+  const res = await core.callTool('upload_image', {
+    slug: 'Deck', name: 'Q3 Chart.PNG', data: 'aGk='
+  }, {
+    assets: {
+      saveImage: async (slug, name, payload) => {
+        uploads.push({ slug, name, payload });
+        return {
+          slug: 'deck', name: 'q3-chart.png', size: 2, contentType: 'image/png',
+          path: '/deck/q3-chart.png', urls: ['https://data.lemzakov.com/deck/q3-chart.png']
+        };
+      }
+    }
+  });
+
+  assert.equal(uploads.length, 1);
+  assert.deepEqual(uploads[0].payload, { data: 'aGk=', contentType: undefined });
+  const out = JSON.parse(res.content[0].text);
+  assert.equal(out.path, '/deck/q3-chart.png');
+  assert.match(out.note, /<img src="\/deck\/q3-chart.png">/);
+});
+
+test('upload_image surfaces the storage error instead of reporting success', async () => {
+  const res = await core.callTool('upload_image', { slug: 'deck', name: 'a.html', data: 'aGk=' }, {
+    assets: { saveImage: async () => { throw new Error('Unsupported image type ".html".'); } }
+  });
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /Unsupported image type/);
+});
+
+test('list_images and delete_image work on the page own namespace', async () => {
+  const listed = await core.callTool('list_images', { slug: 'Deck' }, {
+    assets: { listImages: async (slug) => [{ name: 'a.png', path: `/${slug}/a.png` }] }
+  });
+  const out = JSON.parse(listed.content[0].text);
+  assert.equal(out.slug, 'deck');
+  assert.deepEqual(out.images, [{ name: 'a.png', path: '/deck/a.png' }]);
+
+  const gone = await core.callTool('delete_image', { slug: 'deck', name: 'missing.png' }, {
+    assets: { deleteImage: async (slug, name) => ({ slug, name, deleted: false }) }
+  });
+  assert.equal(gone.isError, true);
+  assert.match(gone.content[0].text, /No image named "missing.png"/);
 });
 
 test('notifications produce no response', async () => {
