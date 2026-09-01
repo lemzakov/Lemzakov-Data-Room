@@ -34,7 +34,7 @@ invisible to visitors.
 
 | | Store | What is in it |
 |---|---|---|
-| **New writes** | Vercel Blob (private) | Every page and project file written since the cutover, plus **all access records** |
+| **New writes** | Vercel Blob (private) | Every page and project file written since the cutover, plus **all access records** and **all page images** |
 | **Back catalogue** | Redis | Pages, project files and ACLs written before the cutover — deliberately **not** migrated |
 | **Always Redis** | Redis | Sessions, project config, page categories, analytics |
 
@@ -49,6 +49,11 @@ Reads query both stores concurrently and prefer Blob, so a pre-cutover page
 serves from Redis exactly as it always did, and nothing had to be moved. Writes
 only ever go to Blob (or to Redis if `BLOB_READ_WRITE_TOKEN` is unset, which
 restores the old behaviour wholesale).
+
+**Page images are the one exception with no Redis path at all.** Image bytes in
+Redis would mean base64 — a third larger — sitting in the RAM-priced store that
+`maxmemory` already took down once, so with no `BLOB_READ_WRITE_TOKEN` an upload
+is refused outright instead of quietly filling Redis.
 
 `/admin` labels every page with the store that serves it — `Blob`, `Redis`, or
 `Blob + Redis` for a legacy page that has since been re-synced or re-published
@@ -100,6 +105,8 @@ in service-account mode, the `serviceAccountEmail` to share with.
 - `GET /login` - convenience redirect into Google sign-in
 - `GET /request-access` - page with the "Request access" button for restricted pages
 - `GET|POST /api/admin/page` - read or set a page's access (admin token required)
+- `GET|POST|DELETE /api/admin/asset` - list, upload or remove the images attached to a page (admin token required)
+- `GET /<slug>/<image>` - an image attached to the page at `/<slug>`, served under that page's own access
 - `GET /api/auth/google/start` · `GET /api/auth/google/callback` - Google OAuth sign-in
 - `GET /api/auth/me` · `POST /api/auth/logout` - session helpers
 - `POST /api/access/request` - submit an access request (sends it to Telegram)
@@ -189,6 +196,66 @@ created implicitly the moment you assign it — there is nothing to pre-define.
   The MCP `publish_page` tool takes the same optional `category` argument, and
   `list_pages` returns each page's `category`.
 
+### Images in a page
+
+A page is one self-contained HTML document, so an image either had to be inlined
+as a `data:` URI — bloating the document, and requiring a full republish to
+change a picture — or hosted somewhere else. Now it can be **uploaded and
+attached to the page**:
+
+```
+stored at   asset/<slug>/<name>   (Vercel Blob, private)
+served at   /<slug>/<name>
+```
+
+The HTML then references it as an ordinary `<img src="/<slug>/<name>">`. Because
+the path sits under the page's own URL, no new route was needed: `/<slug>/<path>`
+already resolves projects first, and falls through to the page's images when the
+slug is an ordinary page.
+
+**Access is not stored per image.** Every image request re-reads the *page's* ACL,
+so an image is exactly as visible as the page it belongs to — restricting the
+page restricts its images in the same instant, with no second list to keep in
+sync. A public page's images are cacheable for five minutes; a restricted page's
+are `private, no-store` and, like the page, bounce an unapproved visitor into
+Google sign-in.
+
+- **In `/admin`**: each page row has an **Images** button — upload (multiple at
+  once), preview, copy the ready-made `<img>` tag, or delete.
+- **Over MCP**: `upload_image` → put the returned `path` in the HTML →
+  `publish_page`. `list_images` and `delete_image` manage what is already there.
+- **From a script** (`.claude/skills/publish-page/scripts/upload-image.js`):
+  ```bash
+  node upload-image.js --slug investor-deck --file ./chart.png
+  node upload-image.js --slug investor-deck --list
+  node upload-image.js --slug investor-deck --delete chart.png
+  ```
+- **Over HTTP**, either raw bytes (no base64 inflation) or JSON:
+  ```bash
+  curl -X POST "https://your-domain/api/admin/asset?slug=investor-deck&name=chart.png" \
+    -H "X-Admin-Token: $ADMIN_TOKEN" -H 'Content-Type: image/png' \
+    --data-binary @chart.png
+
+  curl -X POST https://your-domain/api/admin/asset \
+    -H 'Content-Type: application/json' -H "X-Admin-Token: $ADMIN_TOKEN" \
+    -d '{"slug":"investor-deck","name":"chart.png","data":"<base64 or data: URI>"}'
+  ```
+
+Rules the API enforces:
+
+- **Formats**: png, jpg/jpeg, gif, webp, avif, svg, ico, bmp — nothing else. The
+  served `Content-Type` comes from the extension, never from what the uploader
+  claimed, and responses carry `X-Content-Type-Options: nosniff`.
+- **Size**: 4 MB per image (Vercel caps a request body at 4.5 MB, and base64 adds
+  a third on top).
+- **Names** are lower-cased and cleaned (`Q3 Chart.PNG` → `q3-chart.png`) into one
+  flat namespace per page; any path component is stripped, so nothing can be
+  written outside the page's own prefix. Re-uploading a name replaces that image
+  without republishing the page.
+- Uploading or deleting an image never touches the page's access record, and
+  publishing new HTML never touches the images. **Deleting a page deletes its
+  images.**
+
 ### Page-open analytics (who opened what, when, from where)
 
 Every page open is measured server-side and surfaced per page in **`/admin`**
@@ -274,6 +341,8 @@ Tools:
 | `set_page_access` | Flip a page public/restricted and edit its allow list (no HTML change) |
 | `get_page` | Read a page's current access record |
 | `list_pages` | List every stored page and its access state |
+| `upload_image` | Attach an image to a page (inline `data` or local `file`) and get back its `/<slug>/<name>` path |
+| `list_images` · `delete_image` | List or remove the images attached to a page |
 
 `.mcp.json` references the env vars by name, so export them (or put them in your
 MCP client config) before starting the client:
@@ -304,7 +373,8 @@ Claude discovers the OAuth endpoints automatically, opens a small sign-in page,
 and asks for your **admin token** (the same `ADMIN_TOKEN` / `SYNC_SECRET` that
 guards `/admin`). After you enter it once, Claude holds an access token and can
 call the publish tools (`publish_page`, `set_page_access`, `get_page`,
-`list_pages`) from any chat. No extra environment variables are required — it
+`list_pages`) and the image tools (`upload_image`, `list_images`,
+`delete_image`) from any chat. No extra environment variables are required — it
 reuses `ADMIN_TOKEN`, `REDIS_URL`, and the existing page store.
 
 **How the OAuth works** (standard MCP authorization — Authorization Code + PKCE
@@ -534,8 +604,9 @@ code, but the growth resumes unless new writes are going to Blob.
 ### Deleting pages from /admin
 
 Each row in `/admin` has a **Delete** button. It removes the page HTML, its
-access record, its category and its entire analytics footprint — the counters
-plus up to 1000 per-open detail records, which are usually the larger share.
+access record, its category, every image attached to it and its entire analytics
+footprint — the counters plus up to 1000 per-open detail records, which are
+usually the larger share.
 Both stores are cleared. It asks for confirmation twice, the second time
 requiring the slug typed back, because nothing about it is reversible.
 

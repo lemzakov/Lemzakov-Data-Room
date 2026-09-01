@@ -46,11 +46,56 @@ test('initialize returns protocol version and tools capability', async () => {
   assert.equal(res.result.serverInfo.name, 'lemzakov-data-room');
 });
 
-test('tools/list returns the four publish tools', async () => {
+test('tools/list returns the publish and image tools', async () => {
   const res = await handleMessage({ jsonrpc: '2.0', id: 2, method: 'tools/list' }, { env: ENV });
   const names = res.result.tools.map((t) => t.name).sort();
-  assert.deepEqual(names, ['get_page', 'list_pages', 'publish_page', 'set_page_access']);
-  assert.equal(TOOLS.length, 4);
+  assert.deepEqual(names, [
+    'delete_image', 'get_page', 'list_images', 'list_pages',
+    'publish_page', 'set_page_access', 'upload_image'
+  ]);
+  assert.equal(TOOLS.length, 7);
+});
+
+test('upload_image posts the bytes to /api/admin/asset with the admin token', async () => {
+  const { fetch, calls } = mockFetch(() => ({
+    json: { ok: true, slug: 'deck', name: 'chart.png', path: '/deck/chart.png' }
+  }));
+  const out = await callTool('upload_image', { slug: 'deck', name: 'chart.png', data: 'aGk=' }, { fetch, env: ENV });
+
+  assert.equal(calls[0].url, 'https://data-room.example.com/api/admin/asset');
+  assert.equal(calls[0].method, 'POST');
+  assert.equal(calls[0].headers['X-Admin-Token'], 'secret-token');
+  assert.deepEqual(calls[0].body, { slug: 'deck', name: 'chart.png', data: 'aGk=' });
+  assert.match(out.content[0].text, /\/deck\/chart.png/);
+});
+
+test('upload_image reads a local file and names the upload after it', async () => {
+  const { fetch, calls } = mockFetch(() => ({ json: { ok: true, path: '/deck/chart.png' } }));
+  await callTool('upload_image', { slug: 'deck', file: './chart.png' }, {
+    fetch,
+    env: ENV,
+    readBinaryFile: () => Buffer.from('hi')
+  });
+
+  assert.equal(calls[0].body.data, Buffer.from('hi').toString('base64'));
+  assert.equal(calls[0].body.name, './chart.png', 'the server normalizes the name');
+});
+
+test('upload_image insists on either inline data or a file', async () => {
+  const res = await callTool('upload_image', { slug: 'deck' }, { env: ENV });
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /`data`.*or.*`file`/);
+});
+
+test('list_images reads and delete_image removes through the admin asset API', async () => {
+  const { fetch, calls } = mockFetch(() => ({ json: { ok: true, images: [] } }));
+  await callTool('list_images', { slug: 'deck' }, { fetch, env: ENV });
+  assert.equal(calls[0].url, 'https://data-room.example.com/api/admin/asset?slug=deck');
+  assert.equal(calls[0].method, 'GET');
+
+  await callTool('delete_image', { slug: 'deck', name: 'chart.png' }, { fetch, env: ENV });
+  assert.equal(calls[1].url, 'https://data-room.example.com/api/admin/asset?slug=deck&name=chart.png');
+  assert.equal(calls[1].method, 'DELETE');
 });
 
 test('notifications/initialized produces no response', async () => {

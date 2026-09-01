@@ -1,6 +1,6 @@
 ---
 name: publish-page
-description: Publish a page to the Lemzakov Data Room and set whether it is public or restricted. Use when the user wants to publish/update a data-room page, make a page public, restrict a page, pre-approve people by email, or grant/revoke access. Restricted pages use Google sign-in plus a Telegram-approved "Request access" flow.
+description: Publish a page to the Lemzakov Data Room, attach images to it, and set whether it is public or restricted. Use when the user wants to publish/update a data-room page, upload an image or picture used by a page, make a page public, restrict a page, pre-approve people by email, or grant/revoke access. Restricted pages use Google sign-in plus a Telegram-approved "Request access" flow.
 ---
 
 # Publish a Data Room page (public or restricted)
@@ -47,6 +47,8 @@ Drive**. Both push HTML straight into the site and set per-page access.
    - `set_page_access` — flip a page public/restricted and edit its allow list
    - `get_page` — read a page's current access
    - `list_pages` — list every stored page and its access state
+   - `upload_image` — attach an image to a page and get back its `/<slug>/<name>` path
+   - `list_images` / `delete_image` — see or remove what a page already has
 
    It needs `LDR_BASE_URL` and `LDR_ADMIN_TOKEN` in its environment (the same
    values the script uses). Prefer these tools when they're available — e.g.
@@ -92,6 +94,53 @@ Run the helper (`scripts/publish.js`) with Node:
 Slugs are the page name without `.html` (served at `/<slug>`). Emails are
 lower-cased and de-duplicated server-side.
 
+## Images in a page
+
+A page is a single HTML document, so an image either has to be inlined as a
+`data:` URI — which bloats the document and has to be re-published to change —
+or uploaded once and referenced by URL. Upload it.
+
+Each image is attached to a page and served at **`/<slug>/<name>`**, under that
+page's own access: restrict the page and its images are restricted in the same
+instant; make it public and they are public. Re-uploading the same name replaces
+the image without republishing the page.
+
+**Order matters:** upload the images FIRST, then write the HTML with the paths
+you got back, then publish the page.
+
+Via the MCP server:
+
+```jsonc
+// 1. upload  ->  { "path": "/investor-deck/chart.png", "urls": [...] }
+upload_image { "slug": "investor-deck", "name": "chart.png", "data": "<base64>" }
+// 2. reference it in the HTML:  <img src="/investor-deck/chart.png" alt="…">
+// 3. publish_page { "slug": "investor-deck", "html": "<!doctype …>" }
+```
+
+The stdio server also takes a local path — `upload_image { "slug":
+"investor-deck", "file": "./chart.png" }` — which avoids base64-ing the bytes
+through the conversation.
+
+Via the CLI helper (`scripts/upload-image.js`):
+
+```bash
+node scripts/upload-image.js --slug investor-deck --file ./chart.png
+node scripts/upload-image.js --slug investor-deck --file ./a.png --file ./b.jpg
+node scripts/upload-image.js --slug investor-deck --list
+node scripts/upload-image.js --slug investor-deck --delete chart.png
+```
+
+Rules worth knowing before you upload:
+
+- **Formats:** png, jpg/jpeg, gif, webp, avif, svg, ico, bmp. Nothing else.
+- **Size:** 4 MB per image. Resize before uploading rather than after a failure.
+- **Names** are lower-cased and cleaned (`Q3 Chart.PNG` → `q3-chart.png`), and
+  live in one flat namespace per page — use the name the upload returns, not the
+  one you sent.
+- **Storage:** images require `BLOB_READ_WRITE_TOKEN` (Vercel Blob) on the
+  server; they are never stored in Redis.
+- Deleting a page deletes its images too.
+
 ## Notes
 
 - Pages synced from Google Drive keep working; this only stores an access record
@@ -100,3 +149,5 @@ lower-cased and de-duplicated server-side.
   access on their next request.
 - Approvals normally happen in Telegram, but you can also pre-approve or revoke
   here at publish time with `--allow`.
+- Uploading or deleting an image never changes a page's access record, and
+  publishing new HTML never touches the images already attached to the page.

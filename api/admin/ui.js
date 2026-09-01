@@ -189,6 +189,26 @@ const PAGE = `<!doctype html>
     </form>
   </dialog>
 
+  <!-- Images dialog -->
+  <dialog id="imgDlg" class="wide">
+    <div class="topbar" style="margin-bottom:.5rem;">
+      <h3 style="margin:0;">Images — <code id="iSlug"></code></h3>
+      <button type="button" class="ghost" id="iClose">Close</button>
+    </div>
+    <p class="allow">
+      Uploaded images are served at <code>/&lt;page&gt;/&lt;name&gt;</code> under this page's own
+      access, so a restricted page keeps its images restricted. Reference one from the page HTML
+      as <code>&lt;img src="/&lt;page&gt;/&lt;name&gt;"&gt;</code>. Re-uploading the same name replaces
+      the image without republishing the page. Max 4 MB each.
+    </p>
+    <div class="row" style="margin:.6rem 0;">
+      <input type="file" id="iFiles" accept="image/*" multiple />
+      <button type="button" id="iUpload">Upload</button>
+    </div>
+    <div id="iBody"><p class="muted">Loading…</p></div>
+    <div id="iMsg" class="msg hidden"></div>
+  </dialog>
+
   <!-- Stats dialog -->
   <dialog id="statsDlg" class="wide">
     <div class="topbar" style="margin-bottom:.5rem;">
@@ -391,6 +411,7 @@ const PAGE = `<!doctype html>
         '<td><div class="row">' + access +
           ' <button class="ghost" data-act="stats" data-slug="' + slug + '">Stats</button>' +
           ' <button class="ghost" data-act="category" data-slug="' + slug + '" data-cat="' + escapeHtml(catOf(p)) + '">Category</button>' +
+          ' <button class="ghost" data-act="images" data-slug="' + slug + '">Images</button>' +
           ' <button class="ghost danger" data-act="delete" data-slug="' + slug + '">Delete</button>' +
         '</div></td>' +
       '</tr>';
@@ -464,6 +485,10 @@ const PAGE = `<!doctype html>
         openStats(slug);
       }
 
+      if (act === 'images') {
+        openImages(slug);
+      }
+
       // Irreversible and frees storage, so it asks twice: once for the page,
       // once with the slug typed back to guard against a mis-click on the
       // wrong row.
@@ -520,6 +545,123 @@ const PAGE = `<!doctype html>
         showMsg($('dashMsg'), err.message, 'err');
       } finally {
         $('catSave').disabled = false;
+      }
+    });
+
+    // ---- Images dialog -----------------------------------------------------
+    // Files are POSTed as raw bytes with the name in the query string, so a
+    // 4 MB image stays 4 MB on the wire instead of growing a third in base64.
+    const imgDlg = $('imgDlg');
+    let imgSlug = '';
+
+    function fmtBytes(n) {
+      if (!n) return '';
+      if (n < 1024) return n + ' B';
+      if (n < 1048576) return (n / 1024).toFixed(0) + ' KB';
+      return (n / 1048576).toFixed(2) + ' MB';
+    }
+
+    function renderImages(images) {
+      if (!images.length) {
+        $('iBody').innerHTML = '<p class="muted">No images yet. Upload one above.</p>';
+        return;
+      }
+      $('iBody').innerHTML = '<table><thead><tr><th></th><th>Path</th><th>Size</th><th></th></tr></thead><tbody>' +
+        images.map(function (img) {
+          const name = escapeHtml(img.name);
+          const path = escapeHtml(img.path);
+          return '<tr>' +
+            '<td><img src="' + path + '" alt="" style="height:2.5rem;width:3.5rem;object-fit:cover;border-radius:.3rem;background:rgba(148,163,184,.2);" /></td>' +
+            '<td><code>' + path + '</code></td>' +
+            '<td class="muted">' + escapeHtml(fmtBytes(img.size)) + '</td>' +
+            '<td><div class="row">' +
+              '<button class="ghost" data-img-act="copy" data-name="' + name + '" data-path="' + path + '">Copy &lt;img&gt;</button>' +
+              '<button class="ghost danger" data-img-act="delete" data-name="' + name + '">Delete</button>' +
+            '</div></td>' +
+          '</tr>';
+        }).join('') + '</tbody></table>';
+    }
+
+    async function loadImages() {
+      $('iBody').innerHTML = '<p class="muted">Loading…</p>';
+      try {
+        const r = await fetch('/api/admin/asset?slug=' + encodeURIComponent(imgSlug), { headers: authHeaders() });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || 'Could not load images');
+        renderImages(data.images || []);
+      } catch (err) {
+        $('iBody').innerHTML = '';
+        showMsg($('iMsg'), err.message, 'err');
+      }
+    }
+
+    function openImages(slug) {
+      imgSlug = slug;
+      $('iSlug').textContent = slug;
+      $('iFiles').value = '';
+      hide($('iMsg'));
+      imgDlg.showModal();
+      loadImages();
+    }
+
+    $('iClose').addEventListener('click', () => imgDlg.close());
+
+    $('iUpload').addEventListener('click', async () => {
+      const files = Array.from($('iFiles').files || []);
+      if (!files.length) { showMsg($('iMsg'), 'Choose one or more image files first.', 'err'); return; }
+      $('iUpload').disabled = true;
+      hide($('iMsg'));
+      try {
+        for (const file of files) {
+          const url = '/api/admin/asset?slug=' + encodeURIComponent(imgSlug) +
+            '&name=' + encodeURIComponent(file.name);
+          const r = await fetch(url, {
+            method: 'POST',
+            headers: authHeaders({ 'Content-Type': file.type || 'application/octet-stream' }),
+            body: file
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(file.name + ': ' + (data.error || 'Upload failed'));
+        }
+        $('iFiles').value = '';
+        showMsg($('iMsg'), files.length === 1 ? 'Image uploaded.' : files.length + ' images uploaded.', 'ok');
+        await loadImages();
+      } catch (err) {
+        showMsg($('iMsg'), err.message, 'err');
+      } finally {
+        $('iUpload').disabled = false;
+      }
+    });
+
+    $('iBody').addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-img-act]');
+      if (!btn) return;
+      const name = btn.dataset.name;
+
+      if (btn.dataset.imgAct === 'copy') {
+        const tag = '<img src="' + btn.dataset.path + '" alt="">';
+        try {
+          await navigator.clipboard.writeText(tag);
+          showMsg($('iMsg'), 'Copied ' + tag, 'ok');
+        } catch {
+          showMsg($('iMsg'), tag, 'ok');
+        }
+        return;
+      }
+
+      if (btn.dataset.imgAct === 'delete') {
+        if (!confirm('Delete "' + name + '" from ' + imgSlug + '? Anything on the page pointing at it will break.')) return;
+        btn.disabled = true;
+        try {
+          const r = await fetch('/api/admin/asset?slug=' + encodeURIComponent(imgSlug) +
+            '&name=' + encodeURIComponent(name), { method: 'DELETE', headers: authHeaders() });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok || !data.ok) throw new Error(data.error || 'Delete failed');
+          showMsg($('iMsg'), 'Deleted ' + name + '.', 'ok');
+          await loadImages();
+        } catch (err) {
+          showMsg($('iMsg'), err.message, 'err');
+        }
       }
     });
 
